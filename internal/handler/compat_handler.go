@@ -38,7 +38,7 @@ type compatFilter struct {
 type compatMutation struct {
 	Values  interface{}    `json:"values"`
 	Filters []compatFilter `json:"filters"`
-	Single  string         `json:"single"`
+	Single  interface{}    `json:"single"`
 }
 
 func (h *CompatHandler) Select(c *fiber.Ctx) error {
@@ -84,7 +84,7 @@ func (h *CompatHandler) Insert(c *fiber.Ctx) error {
 
 	switch table {
 	case "profiles":
-		return h.insertProfile(c, values, payload.Single)
+		return h.insertProfile(c, values, mutationSingle(payload.Single))
 	case "rooms":
 		return h.insertRoom(c, values)
 	case "guest_stays":
@@ -94,13 +94,13 @@ func (h *CompatHandler) Insert(c *fiber.Ctx) error {
 	case "menu_categories":
 		return h.insertMenuCategory(c, values)
 	case "menu_items":
-		return h.insertMenuItem(c, values, payload.Single)
+		return h.insertMenuItem(c, values, mutationSingle(payload.Single))
 	case "menu_item_customizations":
 		return h.insertMenuCustomization(c, values)
 	case "inventory_items":
 		return h.insertInventoryItem(c, values)
 	case "guest_preferences":
-		return h.insertGuestPreferences(c, values, payload.Single)
+		return h.insertGuestPreferences(c, values, mutationSingle(payload.Single))
 	default:
 		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility insert table: %s", table))
 	}
@@ -177,6 +177,18 @@ func (h *CompatHandler) Delete(c *fiber.Ctx) error {
 	default:
 		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility delete table: %s", table))
 	}
+}
+
+func mutationSingle(v interface{}) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case bool:
+		if t {
+			return "single"
+		}
+	}
+	return ""
 }
 
 func parseCompatFilters(raw string) []compatFilter {
