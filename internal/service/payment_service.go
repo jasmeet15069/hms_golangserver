@@ -410,6 +410,7 @@ func (s *paymentService) createStripeSession(ctx context.Context, p stripeSessio
 
 	form := url.Values{}
 	form.Set("mode", "payment")
+	form.Set("payment_method_types[0]", "card")
 	form.Set("success_url", p.SuccessURL)
 	form.Set("cancel_url", p.CancelURL)
 	form.Set("customer_email", p.GuestEmail)
