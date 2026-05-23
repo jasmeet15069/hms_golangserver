@@ -83,8 +83,9 @@ func (h *AuthHandler) Refresh(c *fiber.Ctx) error {
 }
 
 type updatePasswordRequest struct {
-	UserID   string `json:"user_id" validate:"required"`
-	Password string `json:"password" validate:"required,min=8"`
+	UserID          string `json:"user_id" validate:"required"`
+	Password        string `json:"password" validate:"required,min=8"`
+	CurrentPassword string `json:"current_password"`
 }
 
 func (h *AuthHandler) UpdatePassword(c *fiber.Ctx) error {
@@ -96,8 +97,14 @@ func (h *AuthHandler) UpdatePassword(c *fiber.Ctx) error {
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid user id")
 	}
-	if err := h.auth.UpdatePassword(c.Context(), id, req.Password); err != nil {
-		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	var updateErr error
+	if req.CurrentPassword != "" {
+		updateErr = h.auth.UpdatePasswordWithCurrent(c.Context(), id, req.CurrentPassword, req.Password)
+	} else {
+		updateErr = h.auth.UpdatePassword(c.Context(), id, req.Password)
+	}
+	if updateErr != nil {
+		return response.Error(c, fiber.StatusBadRequest, updateErr.Error())
 	}
 	return response.OK(c, map[string]string{"status": "updated"})
 }

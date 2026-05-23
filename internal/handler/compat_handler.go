@@ -83,6 +83,8 @@ func (h *CompatHandler) Insert(c *fiber.Ctx) error {
 	}
 
 	switch table {
+	case "profiles":
+		return h.insertProfile(c, values, payload.Single)
 	case "rooms":
 		return h.insertRoom(c, values)
 	case "guest_stays":
@@ -115,11 +117,14 @@ func (h *CompatHandler) Update(c *fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "update values are required")
 	}
 	id, ok := stringFilter(payload.Filters, "id")
-	if !ok || id == "" {
+	if (!ok || id == "") && table != "profiles" && table != "guest_preferences" {
 		return response.Error(c, fiber.StatusBadRequest, "id filter is required")
 	}
 
 	switch table {
+	case "profiles":
+		userID, _ := stringFilter(payload.Filters, "user_id")
+		return h.updateProfile(c, id, userID, values)
 	case "rooms":
 		return h.updateRoom(c, id, values)
 	case "guest_stays":
@@ -164,7 +169,7 @@ func (h *CompatHandler) Delete(c *fiber.Ctx) error {
 			return response.Error(c, fiber.StatusBadRequest, err.Error())
 		}
 		return response.OK(c, []map[string]interface{}{})
-	case "complaints", "menu_categories", "menu_items", "menu_item_customizations", "inventory_items", "guest_preferences":
+	case "profiles", "complaints", "menu_categories", "menu_items", "menu_item_customizations", "inventory_items", "guest_preferences":
 		if _, err := h.pool.Exec(c.Context(), fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, table), id); err != nil {
 			return response.Error(c, fiber.StatusBadRequest, err.Error())
 		}
@@ -303,6 +308,35 @@ func (h *CompatHandler) selectUserRoles(c *fiber.Ctx, filters []compatFilter) er
 		})
 	}
 	return response.OK(c, items)
+}
+
+func (h *CompatHandler) insertProfile(c *fiber.Ctx, v map[string]interface{}, single string) error {
+	id := uuid.New().String()
+	rows, err := h.pool.Query(c.Context(), `INSERT INTO profiles (id, user_id, full_name, phone, avatar_url, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,now(),now()) ON CONFLICT (user_id) DO UPDATE SET full_name = EXCLUDED.full_name, phone = EXCLUDED.phone, avatar_url = EXCLUDED.avatar_url, updated_at = now() RETURNING id, user_id, full_name, phone, avatar_url, created_at, updated_at`,
+		id, asString(v["user_id"]), asStringDefault(v["full_name"], "Guest"), nullableString(v["phone"]), nullableString(v["avatar_url"]))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	defer rows.Close()
+	items, err := scanProfileMaps(rows)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	if single != "" && len(items) > 0 {
+		return response.Created(c, items[0])
+	}
+	return response.Created(c, items)
+}
+
+func (h *CompatHandler) updateProfile(c *fiber.Ctx, id string, userID string, v map[string]interface{}) error {
+	allowed := map[string]bool{"full_name": true, "phone": true, "avatar_url": true}
+	if id != "" {
+		return h.updateAllowed(c, "profiles", id, allowed, v)
+	}
+	if userID == "" {
+		return response.Error(c, fiber.StatusBadRequest, "id or user_id filter is required")
+	}
+	return h.updateAllowedByColumn(c, "profiles", "user_id", userID, allowed, v)
 }
 
 func (h *CompatHandler) selectRooms(c *fiber.Ctx, filters []compatFilter) error {
@@ -875,6 +909,32 @@ func scanRoomMaps(rows interface {
 			"amenities":       amenities,
 			"created_at":      createdAt,
 			"updated_at":      updatedAt,
+		})
+	}
+	return items, rows.Err()
+}
+
+func scanProfileMaps(rows interface {
+	Next() bool
+	Scan(...interface{}) error
+	Err() error
+}) ([]map[string]interface{}, error) {
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, userID, fullName string
+		var phone, avatarURL *string
+		var createdAt, updatedAt interface{}
+		if err := rows.Scan(&id, &userID, &fullName, &phone, &avatarURL, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]interface{}{
+			"id":         id,
+			"user_id":    userID,
+			"full_name":  fullName,
+			"phone":      phone,
+			"avatar_url": avatarURL,
+			"created_at": createdAt,
+			"updated_at": updatedAt,
 		})
 	}
 	return items, rows.Err()

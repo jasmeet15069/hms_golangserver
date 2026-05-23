@@ -59,6 +59,7 @@ type AuthService interface {
 	RefreshSession(ctx context.Context, refreshToken string) (*Session, error)
 	GetUserFromToken(ctx context.Context, tokenStr string) (*domain.User, []domain.UserRole, error)
 	UpdatePassword(ctx context.Context, userID uuid.UUID, newPassword string) error
+	UpdatePasswordWithCurrent(ctx context.Context, userID uuid.UUID, currentPassword, newPassword string) error
 	RevokeRefreshToken(ctx context.Context, refreshToken string) error
 }
 
@@ -187,6 +188,17 @@ func (s *authService) UpdatePassword(ctx context.Context, userID uuid.UUID, newP
 		return err
 	}
 	return s.userRepo.UpdatePassword(ctx, userID, string(hash))
+}
+
+func (s *authService) UpdatePasswordWithCurrent(ctx context.Context, userID uuid.UUID, currentPassword, newPassword string) error {
+	user, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil {
+		return ErrInvalidCredentials
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)); err != nil {
+		return ErrInvalidCredentials
+	}
+	return s.UpdatePassword(ctx, userID, newPassword)
 }
 
 // RevokeRefreshToken adds a refresh token to the Redis deny-list.
