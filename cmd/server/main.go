@@ -48,6 +48,9 @@ func main() {
 		zlog.Fatal("database connect failed", zap.Error(err))
 	}
 	defer db.Close()
+	if err := db.EnsureAppSchema(ctx); err != nil {
+		zlog.Fatal("database schema ensure failed", zap.Error(err))
+	}
 
 	c := cache.Cache(cache.NoopCache{})
 	if cfg.Redis.URL != "" {

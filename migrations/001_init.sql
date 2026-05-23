@@ -123,6 +123,16 @@ CREATE TABLE IF NOT EXISTS orders (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS order_items (
+  id UUID PRIMARY KEY,
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  menu_item_id UUID NOT NULL REFERENCES menu_items(id) ON DELETE RESTRICT,
+  quantity INTEGER NOT NULL DEFAULT 1,
+  unit_price NUMERIC(12,2) NOT NULL DEFAULT 0,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS payments (
   id UUID PRIMARY KEY,
   payment_number TEXT UNIQUE NOT NULL,
@@ -152,6 +162,17 @@ CREATE TABLE IF NOT EXISTS complaints (
   created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id UUID PRIMARY KEY,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  record_id UUID,
+  old_data JSONB,
+  new_data JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS payment_settings (
@@ -197,7 +218,9 @@ CREATE INDEX IF NOT EXISTS idx_guest_stays_dates ON guest_stays(check_in_date, c
 CREATE INDEX IF NOT EXISTS idx_guest_stays_room_dates ON guest_stays(room_id, check_in_date, check_out_date);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_guest_id_created ON orders(guest_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
 CREATE INDEX IF NOT EXISTS idx_payments_status_created ON payments(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_payments_guest_stay_id ON payments(guest_stay_id);
 CREATE INDEX IF NOT EXISTS idx_complaints_status_priority ON complaints(status, priority);
 CREATE INDEX IF NOT EXISTS idx_inventory_low_stock ON inventory_items(current_stock, min_stock);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);

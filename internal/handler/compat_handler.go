@@ -66,6 +66,18 @@ func (h *CompatHandler) Select(c *fiber.Ctx) error {
 		return h.selectInventoryItems(c, filters)
 	case "guest_preferences":
 		return h.selectGuestPreferences(c, filters)
+	case "orders":
+		return h.selectOrders(c, filters)
+	case "order_items":
+		return h.selectOrderItems(c, filters)
+	case "payments":
+		return h.selectPayments(c, filters)
+	case "payment_settings":
+		return h.selectPaymentSettings(c, filters)
+	case "staff_shifts":
+		return h.selectStaffShifts(c, filters)
+	case "audit_logs":
+		return h.selectAuditLogs(c, filters)
 	default:
 		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility table: %s", table))
 	}
@@ -85,6 +97,8 @@ func (h *CompatHandler) Insert(c *fiber.Ctx) error {
 	switch table {
 	case "profiles":
 		return h.insertProfile(c, values, mutationSingle(payload.Single))
+	case "user_roles":
+		return h.insertUserRole(c, values)
 	case "rooms":
 		return h.insertRoom(c, values)
 	case "guest_stays":
@@ -96,11 +110,21 @@ func (h *CompatHandler) Insert(c *fiber.Ctx) error {
 	case "menu_items":
 		return h.insertMenuItem(c, values, mutationSingle(payload.Single))
 	case "menu_item_customizations":
-		return h.insertMenuCustomization(c, values)
+		return h.insertMenuCustomizations(c, valueMaps(payload.Values))
 	case "inventory_items":
 		return h.insertInventoryItem(c, values)
 	case "guest_preferences":
 		return h.insertGuestPreferences(c, values, mutationSingle(payload.Single))
+	case "orders":
+		return h.insertOrder(c, values, mutationSingle(payload.Single))
+	case "order_items":
+		return h.insertOrderItems(c, valueMaps(payload.Values))
+	case "payments":
+		return h.insertPayment(c, values)
+	case "payment_settings":
+		return h.insertPaymentSetting(c, values)
+	case "staff_shifts":
+		return h.insertStaffShift(c, values)
 	default:
 		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility insert table: %s", table))
 	}
@@ -142,6 +166,14 @@ func (h *CompatHandler) Update(c *fiber.Ctx) error {
 	case "guest_preferences":
 		userID, _ := stringFilter(payload.Filters, "user_id")
 		return h.updateGuestPreferences(c, id, userID, values)
+	case "orders":
+		return h.updateOrder(c, id, values)
+	case "payments":
+		return h.updatePayment(c, id, values)
+	case "payment_settings":
+		return h.updatePaymentSetting(c, id, values)
+	case "staff_shifts":
+		return h.updateStaffShift(c, id, values)
 	default:
 		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility update table: %s", table))
 	}
@@ -153,24 +185,50 @@ func (h *CompatHandler) Delete(c *fiber.Ctx) error {
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body")
 	}
-	id, ok := stringFilter(payload.Filters, "id")
-	if !ok || id == "" {
-		return response.Error(c, fiber.StatusBadRequest, "id filter is required")
-	}
+	id, _ := stringFilter(payload.Filters, "id")
 
 	switch table {
 	case "rooms":
+		if id == "" {
+			return response.Error(c, fiber.StatusBadRequest, "id filter is required")
+		}
 		if _, err := h.pool.Exec(c.Context(), `DELETE FROM rooms WHERE id = $1`, id); err != nil {
 			return response.Error(c, fiber.StatusBadRequest, err.Error())
 		}
 		return response.OK(c, []map[string]interface{}{})
 	case "guest_stays":
+		if id == "" {
+			return response.Error(c, fiber.StatusBadRequest, "id filter is required")
+		}
 		if _, err := h.pool.Exec(c.Context(), `DELETE FROM guest_stays WHERE id = $1`, id); err != nil {
 			return response.Error(c, fiber.StatusBadRequest, err.Error())
 		}
 		return response.OK(c, []map[string]interface{}{})
-	case "profiles", "complaints", "menu_categories", "menu_items", "menu_item_customizations", "inventory_items", "guest_preferences":
+	case "profiles", "complaints", "menu_categories", "menu_items", "inventory_items", "guest_preferences", "orders", "payments", "payment_settings", "staff_shifts":
+		if id == "" {
+			return response.Error(c, fiber.StatusBadRequest, "id filter is required")
+		}
 		if _, err := h.pool.Exec(c.Context(), fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, table), id); err != nil {
+			return response.Error(c, fiber.StatusBadRequest, err.Error())
+		}
+		return response.OK(c, []map[string]interface{}{})
+	case "menu_item_customizations":
+		return h.deleteByIDOrColumn(c, table, id, payload.Filters, "menu_item_id")
+	case "order_items":
+		return h.deleteByIDOrColumn(c, table, id, payload.Filters, "order_id")
+	case "user_roles":
+		if id != "" {
+			if _, err := h.pool.Exec(c.Context(), `DELETE FROM user_roles WHERE id = $1`, id); err != nil {
+				return response.Error(c, fiber.StatusBadRequest, err.Error())
+			}
+			return response.OK(c, []map[string]interface{}{})
+		}
+		userID, _ := stringFilter(payload.Filters, "user_id")
+		role, _ := stringFilter(payload.Filters, "role")
+		if userID == "" || role == "" {
+			return response.Error(c, fiber.StatusBadRequest, "id or user_id+role filters are required")
+		}
+		if _, err := h.pool.Exec(c.Context(), `DELETE FROM user_roles WHERE user_id = $1 AND role = $2`, userID, role); err != nil {
 			return response.Error(c, fiber.StatusBadRequest, err.Error())
 		}
 		return response.OK(c, []map[string]interface{}{})
@@ -196,7 +254,13 @@ func parseCompatFilters(raw string) []compatFilter {
 		return nil
 	}
 	var filters []compatFilter
-	_ = json.Unmarshal([]byte(raw), &filters)
+	if err := json.Unmarshal([]byte(raw), &filters); err == nil {
+		return filters
+	}
+	var single compatFilter
+	if err := json.Unmarshal([]byte(raw), &single); err == nil && single.Column != "" {
+		return []compatFilter{single}
+	}
 	return filters
 }
 
@@ -241,6 +305,23 @@ func firstValueMap(values interface{}) (map[string]interface{}, bool) {
 		return m, ok
 	default:
 		return nil, false
+	}
+}
+
+func valueMaps(values interface{}) []map[string]interface{} {
+	switch v := values.(type) {
+	case map[string]interface{}:
+		return []map[string]interface{}{v}
+	case []interface{}:
+		items := make([]map[string]interface{}, 0, len(v))
+		for _, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				items = append(items, m)
+			}
+		}
+		return items
+	default:
+		return nil
 	}
 }
 
@@ -336,6 +417,25 @@ func (h *CompatHandler) insertProfile(c *fiber.Ctx, v map[string]interface{}, si
 	}
 	if single != "" && len(items) > 0 {
 		return response.Created(c, items[0])
+	}
+	return response.Created(c, items)
+}
+
+func (h *CompatHandler) insertUserRole(c *fiber.Ctx, v map[string]interface{}) error {
+	id := uuid.New().String()
+	rows, err := h.pool.Query(c.Context(), `INSERT INTO user_roles (id, user_id, role, created_at) VALUES ($1,$2,$3,now()) ON CONFLICT (user_id, role) DO UPDATE SET role = EXCLUDED.role RETURNING id, user_id, role, created_at`, id, asString(v["user_id"]), asString(v["role"]))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, userID, role string
+		var createdAt interface{}
+		if err := rows.Scan(&id, &userID, &role, &createdAt); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		items = append(items, map[string]interface{}{"id": id, "user_id": userID, "role": role, "created_at": createdAt})
 	}
 	return response.Created(c, items)
 }
@@ -748,6 +848,19 @@ func (h *CompatHandler) insertMenuCustomization(c *fiber.Ctx, v map[string]inter
 	return response.Created(c, []map[string]interface{}{{"id": id}})
 }
 
+func (h *CompatHandler) insertMenuCustomizations(c *fiber.Ctx, values []map[string]interface{}) error {
+	items := make([]map[string]interface{}, 0, len(values))
+	for _, v := range values {
+		id := uuid.New().String()
+		_, err := h.pool.Exec(c.Context(), `INSERT INTO menu_item_customizations (id, menu_item_id, name, price, is_available, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,now(),now())`, id, asString(v["menu_item_id"]), asString(v["name"]), asFloatDefault(v["price"], 0), asBoolDefault(v["is_available"], true))
+		if err != nil {
+			return response.Error(c, fiber.StatusBadRequest, err.Error())
+		}
+		items = append(items, map[string]interface{}{"id": id})
+	}
+	return response.Created(c, items)
+}
+
 func (h *CompatHandler) insertInventoryItem(c *fiber.Ctx, v map[string]interface{}) error {
 	id := uuid.New().String()
 	_, err := h.pool.Exec(c.Context(), `INSERT INTO inventory_items (id, name, unit, current_stock, min_stock, cost_per_unit, is_perishable, expiry_date, supplier, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),now())`, id, asString(v["name"]), asStringDefault(v["unit"], "unit"), asFloatDefault(v["current_stock"], 0), asFloatDefault(v["min_stock"], 0), nullableFloat(v["cost_per_unit"]), asBoolDefault(v["is_perishable"], false), v["expiry_date"], nullableString(v["supplier"]))
@@ -817,6 +930,326 @@ func (h *CompatHandler) updateGuestPreferences(c *fiber.Ctx, id string, userID s
 	return h.updateAllowedByColumn(c, "guest_preferences", "user_id", userID, allowed, v)
 }
 
+func (h *CompatHandler) selectOrders(c *fiber.Ctx, filters []compatFilter) error {
+	q := `SELECT o.id, o.order_number, o.guest_stay_id, o.room_id, o.guest_id, o.status,
+	             o.special_instructions, o.total_amount, o.assigned_waiter_id, o.created_by,
+	             o.kitchen_notes, o.pickup_time, o.delivery_time, o.rating, o.feedback,
+	             o.created_at, o.updated_at, r.room_number, gs.guest_name
+	      FROM orders o
+	      LEFT JOIN rooms r ON r.id = o.room_id
+	      LEFT JOIN guest_stays gs ON gs.id = o.guest_stay_id`
+	args := []interface{}{}
+	where := []string{}
+	for _, col := range []string{"guest_id", "room_id", "guest_stay_id", "status"} {
+		if v, ok := filterValue(filters, col); ok {
+			args = append(args, v)
+			where = append(where, fmt.Sprintf("o.%s = $%d", col, len(args)))
+		}
+	}
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	q += " ORDER BY o.created_at DESC"
+	rows, err := h.pool.Query(c.Context(), q, args...)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, orderNumber, status string
+		var guestStayID, roomID, guestID, instructions, waiterID, createdBy, kitchenNotes, feedback, roomNumber, guestName *string
+		var total float64
+		var pickup, delivery, createdAt, updatedAt interface{}
+		var rating *int
+		if err := rows.Scan(&id, &orderNumber, &guestStayID, &roomID, &guestID, &status, &instructions, &total, &waiterID, &createdBy, &kitchenNotes, &pickup, &delivery, &rating, &feedback, &createdAt, &updatedAt, &roomNumber, &guestName); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		orderItems, err := h.orderItemsFor(c, id)
+		if err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		item := map[string]interface{}{
+			"id": id, "order_number": orderNumber, "guest_stay_id": guestStayID, "room_id": roomID, "guest_id": guestID,
+			"status": status, "special_instructions": instructions, "total_amount": total, "assigned_waiter_id": waiterID,
+			"created_by": createdBy, "kitchen_notes": kitchenNotes, "pickup_time": pickup, "delivery_time": delivery,
+			"rating": rating, "feedback": feedback, "created_at": createdAt, "updated_at": updatedAt,
+			"order_items": orderItems, "rooms": nil, "guest_stays": nil,
+		}
+		if roomNumber != nil {
+			item["rooms"] = map[string]interface{}{"room_number": *roomNumber}
+		}
+		if guestName != nil {
+			item["guest_stays"] = map[string]interface{}{"guest_name": *guestName}
+		}
+		items = append(items, item)
+	}
+	return response.OK(c, items)
+}
+
+func (h *CompatHandler) selectOrderItems(c *fiber.Ctx, filters []compatFilter) error {
+	orderID, _ := stringFilter(filters, "order_id")
+	items, err := h.orderItemsFor(c, orderID)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	return response.OK(c, items)
+}
+
+func (h *CompatHandler) orderItemsFor(c *fiber.Ctx, orderID string) ([]map[string]interface{}, error) {
+	q := `SELECT oi.id, oi.order_id, oi.menu_item_id, oi.quantity, oi.unit_price, oi.notes, oi.created_at, mi.name
+	      FROM order_items oi LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id`
+	args := []interface{}{}
+	if orderID != "" {
+		q += ` WHERE oi.order_id = $1`
+		args = append(args, orderID)
+	}
+	q += ` ORDER BY oi.created_at`
+	rows, err := h.pool.Query(c.Context(), q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, oid, menuID string
+		var qty int
+		var price float64
+		var notes, itemName *string
+		var createdAt interface{}
+		if err := rows.Scan(&id, &oid, &menuID, &qty, &price, &notes, &createdAt, &itemName); err != nil {
+			return nil, err
+		}
+		menu := interface{}(nil)
+		if itemName != nil {
+			menu = map[string]interface{}{"name": *itemName}
+		}
+		items = append(items, map[string]interface{}{"id": id, "order_id": oid, "menu_item_id": menuID, "quantity": qty, "unit_price": price, "notes": notes, "created_at": createdAt, "menu_items": menu})
+	}
+	return items, rows.Err()
+}
+
+func (h *CompatHandler) selectPayments(c *fiber.Ctx, filters []compatFilter) error {
+	q := `SELECT p.id, p.payment_number, p.guest_stay_id, p.order_id, p.amount, p.payment_method,
+	             p.status, p.processed_by, p.notes, p.created_at,
+	             o.order_number, gs.guest_name, gs.guest_id, r.room_number
+	      FROM payments p
+	      LEFT JOIN orders o ON o.id = p.order_id
+	      LEFT JOIN guest_stays gs ON gs.id = p.guest_stay_id
+	      LEFT JOIN rooms r ON r.id = gs.room_id`
+	args := []interface{}{}
+	where := []string{}
+	if v, ok := filterValue(filters, "guest_stays.guest_id"); ok {
+		args = append(args, v)
+		where = append(where, fmt.Sprintf("gs.guest_id = $%d", len(args)))
+	}
+	if v, ok := filterValue(filters, "guest_stay_id"); ok {
+		args = append(args, v)
+		where = append(where, fmt.Sprintf("p.guest_stay_id = $%d", len(args)))
+	}
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	q += " ORDER BY p.created_at DESC"
+	rows, err := h.pool.Query(c.Context(), q, args...)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, number, method, status string
+		var stayID, orderID, processedBy, notes, orderNumber, guestName, guestID, roomNumber *string
+		var amount float64
+		var createdAt interface{}
+		if err := rows.Scan(&id, &number, &stayID, &orderID, &amount, &method, &status, &processedBy, &notes, &createdAt, &orderNumber, &guestName, &guestID, &roomNumber); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		order := interface{}(nil)
+		if orderNumber != nil {
+			order = map[string]interface{}{"order_number": *orderNumber}
+		}
+		stay := interface{}(nil)
+		if guestName != nil {
+			room := interface{}(nil)
+			if roomNumber != nil {
+				room = map[string]interface{}{"room_number": *roomNumber}
+			}
+			stay = map[string]interface{}{"guest_name": *guestName, "guest_id": guestID, "rooms": room}
+		}
+		items = append(items, map[string]interface{}{"id": id, "payment_number": number, "guest_stay_id": stayID, "order_id": orderID, "amount": amount, "payment_method": method, "status": status, "processed_by": processedBy, "notes": notes, "created_at": createdAt, "orders": order, "guest_stays": stay})
+	}
+	return response.OK(c, items)
+}
+
+func (h *CompatHandler) selectPaymentSettings(c *fiber.Ctx, filters []compatFilter) error {
+	rows, err := h.pool.Query(c.Context(), `SELECT id, gateway_name, webhook_url, is_active, created_by, created_at, updated_at FROM payment_settings ORDER BY gateway_name`)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, name string
+		var webhook, createdBy *string
+		var active bool
+		var createdAt, updatedAt interface{}
+		if err := rows.Scan(&id, &name, &webhook, &active, &createdBy, &createdAt, &updatedAt); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		items = append(items, map[string]interface{}{"id": id, "gateway_name": name, "webhook_url": webhook, "is_active": active, "created_by": createdBy, "created_at": createdAt, "updated_at": updatedAt})
+	}
+	return response.OK(c, items)
+}
+
+func (h *CompatHandler) selectStaffShifts(c *fiber.Ctx, filters []compatFilter) error {
+	q := `SELECT ss.id, ss.user_id, ss.clock_in, ss.clock_out, ss.notes, ss.created_at, p.full_name
+	      FROM staff_shifts ss LEFT JOIN profiles p ON p.user_id = ss.user_id`
+	args := []interface{}{}
+	if v, ok := filterValue(filters, "user_id"); ok {
+		q += " WHERE ss.user_id = $1"
+		args = append(args, v)
+	}
+	q += " ORDER BY ss.clock_in DESC"
+	rows, err := h.pool.Query(c.Context(), q, args...)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, userID string
+		var clockIn, clockOut, createdAt interface{}
+		var notes, fullName *string
+		if err := rows.Scan(&id, &userID, &clockIn, &clockOut, &notes, &createdAt, &fullName); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		profile := interface{}(nil)
+		if fullName != nil {
+			profile = map[string]interface{}{"full_name": *fullName}
+		}
+		items = append(items, map[string]interface{}{"id": id, "user_id": userID, "clock_in": clockIn, "clock_out": clockOut, "notes": notes, "created_at": createdAt, "profiles": profile})
+	}
+	return response.OK(c, items)
+}
+
+func (h *CompatHandler) selectAuditLogs(c *fiber.Ctx, filters []compatFilter) error {
+	rows, err := h.pool.Query(c.Context(), `SELECT id, user_id, action, table_name, record_id, old_data, new_data, created_at FROM audit_logs ORDER BY created_at DESC`)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, action, tableName string
+		var userID, recordID *string
+		var oldData, newData map[string]interface{}
+		var createdAt interface{}
+		if err := rows.Scan(&id, &userID, &action, &tableName, &recordID, &oldData, &newData, &createdAt); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		items = append(items, map[string]interface{}{"id": id, "user_id": userID, "action": action, "table_name": tableName, "record_id": recordID, "old_data": oldData, "new_data": newData, "created_at": createdAt})
+	}
+	return response.OK(c, items)
+}
+
+func (h *CompatHandler) insertOrder(c *fiber.Ctx, v map[string]interface{}, single string) error {
+	id := uuid.New().String()
+	number := asStringDefault(v["order_number"], fmt.Sprintf("ORD-%s", id[:8]))
+	rows, err := h.pool.Query(c.Context(), `INSERT INTO orders (id, order_number, guest_stay_id, room_id, guest_id, status, special_instructions, total_amount, assigned_waiter_id, created_by, kitchen_notes, pickup_time, delivery_time, rating, feedback, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now(),now()) RETURNING id, order_number, guest_stay_id, room_id, guest_id, status, special_instructions, total_amount, assigned_waiter_id, created_by, kitchen_notes, pickup_time, delivery_time, rating, feedback, created_at, updated_at`,
+		id, number, nullableString(v["guest_stay_id"]), nullableString(v["room_id"]), nullableString(v["guest_id"]), asStringDefault(v["status"], "pending"), nullableString(v["special_instructions"]), asFloatDefault(v["total_amount"], 0), nullableString(v["assigned_waiter_id"]), nullableString(v["created_by"]), nullableString(v["kitchen_notes"]), v["pickup_time"], v["delivery_time"], nullableInt(v["rating"]), nullableString(v["feedback"]))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	defer rows.Close()
+	items, err := scanOrderBasicMaps(rows)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	if single != "" && len(items) > 0 {
+		return response.Created(c, items[0])
+	}
+	return response.Created(c, items)
+}
+
+func (h *CompatHandler) insertOrderItems(c *fiber.Ctx, values []map[string]interface{}) error {
+	items := make([]map[string]interface{}, 0, len(values))
+	for _, v := range values {
+		id := uuid.New().String()
+		_, err := h.pool.Exec(c.Context(), `INSERT INTO order_items (id, order_id, menu_item_id, quantity, unit_price, notes, created_at) VALUES ($1,$2,$3,$4,$5,$6,now())`, id, asString(v["order_id"]), asString(v["menu_item_id"]), asIntDefault(v["quantity"], 1), asFloatDefault(v["unit_price"], 0), nullableString(v["notes"]))
+		if err != nil {
+			return response.Error(c, fiber.StatusBadRequest, err.Error())
+		}
+		items = append(items, map[string]interface{}{"id": id})
+	}
+	return response.Created(c, items)
+}
+
+func (h *CompatHandler) insertPayment(c *fiber.Ctx, v map[string]interface{}) error {
+	id := uuid.New().String()
+	number := asStringDefault(v["payment_number"], fmt.Sprintf("PAY-%s", id[:8]))
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO payments (id, payment_number, guest_stay_id, order_id, amount, payment_method, status, processed_by, notes, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now())`, id, number, nullableString(v["guest_stay_id"]), nullableString(v["order_id"]), asFloatDefault(v["amount"], 0), asStringDefault(v["payment_method"], "cash"), asStringDefault(v["status"], "pending"), nullableString(v["processed_by"]), nullableString(v["notes"]))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	return response.Created(c, []map[string]interface{}{{"id": id}})
+}
+
+func (h *CompatHandler) insertPaymentSetting(c *fiber.Ctx, v map[string]interface{}) error {
+	id := uuid.New().String()
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO payment_settings (id, gateway_name, webhook_url, is_active, created_by, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,now(),now()) ON CONFLICT (gateway_name) DO UPDATE SET webhook_url = EXCLUDED.webhook_url, is_active = EXCLUDED.is_active, updated_at = now()`, id, asString(v["gateway_name"]), nullableString(v["webhook_url"]), asBoolDefault(v["is_active"], true), nullableString(v["created_by"]))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	return response.Created(c, []map[string]interface{}{{"id": id}})
+}
+
+func (h *CompatHandler) insertStaffShift(c *fiber.Ctx, v map[string]interface{}) error {
+	id := uuid.New().String()
+	clockIn := v["clock_in"]
+	if clockIn == nil {
+		clockIn = "now()"
+	}
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO staff_shifts (id, user_id, clock_in, clock_out, notes, created_at) VALUES ($1,$2,$3,$4,$5,now())`, id, asString(v["user_id"]), clockIn, v["clock_out"], nullableString(v["notes"]))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	return response.Created(c, []map[string]interface{}{{"id": id}})
+}
+
+func (h *CompatHandler) updateOrder(c *fiber.Ctx, id string, v map[string]interface{}) error {
+	return h.updateAllowed(c, "orders", id, map[string]bool{"guest_stay_id": true, "room_id": true, "guest_id": true, "status": true, "special_instructions": true, "total_amount": true, "assigned_waiter_id": true, "created_by": true, "kitchen_notes": true, "pickup_time": true, "delivery_time": true, "rating": true, "feedback": true}, v)
+}
+
+func (h *CompatHandler) updatePayment(c *fiber.Ctx, id string, v map[string]interface{}) error {
+	return h.updateAllowedWithoutTimestamp(c, "payments", id, map[string]bool{"guest_stay_id": true, "order_id": true, "amount": true, "payment_method": true, "status": true, "processed_by": true, "notes": true}, v)
+}
+
+func (h *CompatHandler) updatePaymentSetting(c *fiber.Ctx, id string, v map[string]interface{}) error {
+	return h.updateAllowed(c, "payment_settings", id, map[string]bool{"gateway_name": true, "webhook_url": true, "is_active": true, "created_by": true}, v)
+}
+
+func (h *CompatHandler) updateStaffShift(c *fiber.Ctx, id string, v map[string]interface{}) error {
+	return h.updateAllowedWithoutTimestamp(c, "staff_shifts", id, map[string]bool{"user_id": true, "clock_in": true, "clock_out": true, "notes": true}, v)
+}
+
+func (h *CompatHandler) deleteByIDOrColumn(c *fiber.Ctx, table, id string, filters []compatFilter, column string) error {
+	if id != "" {
+		if _, err := h.pool.Exec(c.Context(), fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, table), id); err != nil {
+			return response.Error(c, fiber.StatusBadRequest, err.Error())
+		}
+		return response.OK(c, []map[string]interface{}{})
+	}
+	value, ok := stringFilter(filters, column)
+	if !ok || value == "" {
+		return response.Error(c, fiber.StatusBadRequest, "id filter is required")
+	}
+	if _, err := h.pool.Exec(c.Context(), fmt.Sprintf(`DELETE FROM %s WHERE %s = $1`, table, column), value); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	return response.OK(c, []map[string]interface{}{})
+}
+
 func scanGuestPreferenceMaps(rows interface {
 	Next() bool
 	Scan(...interface{}) error
@@ -855,6 +1288,31 @@ func scanMenuItemBasicMaps(rows interface {
 			return nil, err
 		}
 		items = append(items, map[string]interface{}{"id": id, "category_id": categoryID, "name": name, "description": description, "price": price, "image_url": imageURL, "is_available": isAvailable, "preparation_time": prep, "created_at": createdAt, "updated_at": updatedAt})
+	}
+	return items, rows.Err()
+}
+
+func scanOrderBasicMaps(rows interface {
+	Next() bool
+	Scan(...interface{}) error
+	Err() error
+}) ([]map[string]interface{}, error) {
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, number, status string
+		var guestStayID, roomID, guestID, instructions, waiterID, createdBy, kitchenNotes, feedback *string
+		var total float64
+		var pickup, delivery, createdAt, updatedAt interface{}
+		var rating *int
+		if err := rows.Scan(&id, &number, &guestStayID, &roomID, &guestID, &status, &instructions, &total, &waiterID, &createdBy, &kitchenNotes, &pickup, &delivery, &rating, &feedback, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]interface{}{
+			"id": id, "order_number": number, "guest_stay_id": guestStayID, "room_id": roomID, "guest_id": guestID,
+			"status": status, "special_instructions": instructions, "total_amount": total, "assigned_waiter_id": waiterID,
+			"created_by": createdBy, "kitchen_notes": kitchenNotes, "pickup_time": pickup, "delivery_time": delivery,
+			"rating": rating, "feedback": feedback, "created_at": createdAt, "updated_at": updatedAt,
+		})
 	}
 	return items, rows.Err()
 }
@@ -1072,6 +1530,13 @@ func nullableFloat(v interface{}) interface{} {
 		return nil
 	}
 	return asFloatDefault(v, 0)
+}
+
+func nullableInt(v interface{}) interface{} {
+	if v == nil {
+		return nil
+	}
+	return asIntDefault(v, 0)
 }
 
 func asStringSlice(v interface{}) []string {
