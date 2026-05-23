@@ -785,6 +785,11 @@ func (h *CompatHandler) updateInventoryItem(c *fiber.Ctx, id string, v map[strin
 }
 
 func (h *CompatHandler) updateGuestPreferences(c *fiber.Ctx, id string, userID string, v map[string]interface{}) error {
+	for _, key := range []string{"dietary_restrictions", "allergies", "favorite_categories"} {
+		if _, ok := v[key]; ok {
+			v[key] = asStringSlice(v[key])
+		}
+	}
 	if _, hasCountry := v["country"]; hasCountry {
 		v["notes"] = mergePreferenceNotes(nullableString(v["notes"]), asStringDefault(v["country"], "United States"), asStringDefault(v["currency"], "USD"))
 		delete(v, "country")
