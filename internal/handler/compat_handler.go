@@ -53,6 +53,16 @@ func (h *CompatHandler) Select(c *fiber.Ctx) error {
 		return h.selectRooms(c, filters)
 	case "guest_stays":
 		return h.selectGuestStays(c, filters)
+	case "complaints":
+		return h.selectComplaints(c, filters)
+	case "menu_categories":
+		return h.selectMenuCategories(c, filters)
+	case "menu_items":
+		return h.selectMenuItems(c, filters)
+	case "menu_item_customizations":
+		return h.selectMenuCustomizations(c, filters)
+	case "inventory_items":
+		return h.selectInventoryItems(c, filters)
 	default:
 		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility table: %s", table))
 	}
@@ -74,6 +84,16 @@ func (h *CompatHandler) Insert(c *fiber.Ctx) error {
 		return h.insertRoom(c, values)
 	case "guest_stays":
 		return h.insertGuestStay(c, values)
+	case "complaints":
+		return h.insertComplaint(c, values)
+	case "menu_categories":
+		return h.insertMenuCategory(c, values)
+	case "menu_items":
+		return h.insertMenuItem(c, values, payload.Single)
+	case "menu_item_customizations":
+		return h.insertMenuCustomization(c, values)
+	case "inventory_items":
+		return h.insertInventoryItem(c, values)
 	default:
 		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility insert table: %s", table))
 	}
@@ -99,6 +119,16 @@ func (h *CompatHandler) Update(c *fiber.Ctx) error {
 		return h.updateRoom(c, id, values)
 	case "guest_stays":
 		return h.updateGuestStay(c, id, values)
+	case "complaints":
+		return h.updateComplaint(c, id, values)
+	case "menu_categories":
+		return h.updateMenuCategory(c, id, values)
+	case "menu_items":
+		return h.updateMenuItem(c, id, values)
+	case "menu_item_customizations":
+		return h.updateMenuCustomization(c, id, values)
+	case "inventory_items":
+		return h.updateInventoryItem(c, id, values)
 	default:
 		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility update table: %s", table))
 	}
@@ -123,6 +153,11 @@ func (h *CompatHandler) Delete(c *fiber.Ctx) error {
 		return response.OK(c, []map[string]interface{}{})
 	case "guest_stays":
 		if _, err := h.pool.Exec(c.Context(), `DELETE FROM guest_stays WHERE id = $1`, id); err != nil {
+			return response.Error(c, fiber.StatusBadRequest, err.Error())
+		}
+		return response.OK(c, []map[string]interface{}{})
+	case "complaints", "menu_categories", "menu_items", "menu_item_customizations", "inventory_items":
+		if _, err := h.pool.Exec(c.Context(), fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, table), id); err != nil {
 			return response.Error(c, fiber.StatusBadRequest, err.Error())
 		}
 		return response.OK(c, []map[string]interface{}{})
@@ -437,7 +472,252 @@ func (h *CompatHandler) updateGuestStay(c *fiber.Ctx, id string, v map[string]in
 	return h.updateAllowed(c, "guest_stays", id, allowed, v)
 }
 
+func (h *CompatHandler) selectComplaints(c *fiber.Ctx, filters []compatFilter) error {
+	q := `SELECT c.id, c.complaint_number, c.guest_stay_id, c.guest_id, c.category, c.priority,
+		         c.status, c.description, c.resolution, c.resolved_by, c.resolved_at, c.guest_feedback,
+		         c.created_by, c.created_at, c.updated_at, gs.guest_name, r.room_number
+		  FROM complaints c
+		  LEFT JOIN guest_stays gs ON gs.id = c.guest_stay_id
+		  LEFT JOIN rooms r ON r.id = gs.room_id`
+	rows, err := h.pool.Query(c.Context(), q+" ORDER BY c.created_at DESC")
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, number, category, priority, status, description string
+		var guestStayID, guestID, resolution, resolvedBy, guestFeedback, createdBy, guestName, roomNumber *string
+		var resolvedAt, createdAt, updatedAt interface{}
+		if err := rows.Scan(&id, &number, &guestStayID, &guestID, &category, &priority, &status, &description, &resolution, &resolvedBy, &resolvedAt, &guestFeedback, &createdBy, &createdAt, &updatedAt, &guestName, &roomNumber); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		guestStay := interface{}(nil)
+		if guestName != nil {
+			room := interface{}(nil)
+			if roomNumber != nil {
+				room = map[string]interface{}{"room_number": *roomNumber}
+			}
+			guestStay = map[string]interface{}{"guest_name": *guestName, "rooms": room}
+		}
+		items = append(items, map[string]interface{}{"id": id, "complaint_number": number, "guest_stay_id": guestStayID, "guest_id": guestID, "category": category, "priority": priority, "status": status, "description": description, "resolution": resolution, "resolved_by": resolvedBy, "resolved_at": resolvedAt, "guest_feedback": guestFeedback, "created_by": createdBy, "created_at": createdAt, "updated_at": updatedAt, "guest_stays": guestStay})
+	}
+	return response.OK(c, items)
+}
+
+func (h *CompatHandler) selectMenuCategories(c *fiber.Ctx, filters []compatFilter) error {
+	rows, err := h.pool.Query(c.Context(), `SELECT id, name, description, display_order, is_active, created_at FROM menu_categories ORDER BY display_order, name`)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, name string
+		var description *string
+		var displayOrder int
+		var isActive bool
+		var createdAt interface{}
+		if err := rows.Scan(&id, &name, &description, &displayOrder, &isActive, &createdAt); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		items = append(items, map[string]interface{}{"id": id, "name": name, "description": description, "display_order": displayOrder, "is_active": isActive, "created_at": createdAt})
+	}
+	return response.OK(c, items)
+}
+
+func (h *CompatHandler) selectMenuItems(c *fiber.Ctx, filters []compatFilter) error {
+	rows, err := h.pool.Query(c.Context(), `SELECT mi.id, mi.category_id, mi.name, mi.description, mi.price, mi.image_url, mi.is_available, mi.preparation_time, mi.created_at, mi.updated_at, mc.name FROM menu_items mi LEFT JOIN menu_categories mc ON mc.id = mi.category_id ORDER BY mi.name`)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, name string
+		var categoryID, description, imageURL, categoryName *string
+		var price float64
+		var isAvailable bool
+		var prep int
+		var createdAt, updatedAt interface{}
+		if err := rows.Scan(&id, &categoryID, &name, &description, &price, &imageURL, &isAvailable, &prep, &createdAt, &updatedAt, &categoryName); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		customizations, err := h.menuCustomizationsFor(c, id)
+		if err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		category := interface{}(nil)
+		if categoryName != nil {
+			category = map[string]interface{}{"name": *categoryName}
+		}
+		items = append(items, map[string]interface{}{"id": id, "category_id": categoryID, "name": name, "description": description, "price": price, "image_url": imageURL, "is_available": isAvailable, "preparation_time": prep, "created_at": createdAt, "updated_at": updatedAt, "menu_categories": category, "menu_item_customizations": customizations})
+	}
+	return response.OK(c, items)
+}
+
+func (h *CompatHandler) selectMenuCustomizations(c *fiber.Ctx, filters []compatFilter) error {
+	menuItemID, _ := stringFilter(filters, "menu_item_id")
+	items, err := h.menuCustomizationsFor(c, menuItemID)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	return response.OK(c, items)
+}
+
+func (h *CompatHandler) menuCustomizationsFor(c *fiber.Ctx, menuItemID string) ([]map[string]interface{}, error) {
+	q := `SELECT id, menu_item_id, name, price, is_available, created_at, updated_at FROM menu_item_customizations`
+	args := []interface{}{}
+	if menuItemID != "" {
+		q += ` WHERE menu_item_id = $1`
+		args = append(args, menuItemID)
+	}
+	q += ` ORDER BY name`
+	rows, err := h.pool.Query(c.Context(), q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, itemID, name string
+		var price float64
+		var isAvailable bool
+		var createdAt, updatedAt interface{}
+		if err := rows.Scan(&id, &itemID, &name, &price, &isAvailable, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]interface{}{"id": id, "menu_item_id": itemID, "name": name, "price": price, "is_available": isAvailable, "created_at": createdAt, "updated_at": updatedAt})
+	}
+	return items, rows.Err()
+}
+
+func (h *CompatHandler) selectInventoryItems(c *fiber.Ctx, filters []compatFilter) error {
+	rows, err := h.pool.Query(c.Context(), `SELECT id, name, unit, current_stock, min_stock, cost_per_unit, is_perishable, expiry_date, supplier, created_at, updated_at FROM inventory_items ORDER BY name`)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, name, unit string
+		var currentStock, minStock float64
+		var costPerUnit *float64
+		var isPerishable bool
+		var expiryDate, createdAt, updatedAt interface{}
+		var supplier *string
+		if err := rows.Scan(&id, &name, &unit, &currentStock, &minStock, &costPerUnit, &isPerishable, &expiryDate, &supplier, &createdAt, &updatedAt); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		items = append(items, map[string]interface{}{"id": id, "name": name, "unit": unit, "current_stock": currentStock, "min_stock": minStock, "cost_per_unit": costPerUnit, "is_perishable": isPerishable, "expiry_date": expiryDate, "supplier": supplier, "created_at": createdAt, "updated_at": updatedAt})
+	}
+	return response.OK(c, items)
+}
+
+func (h *CompatHandler) insertComplaint(c *fiber.Ctx, v map[string]interface{}) error {
+	id := uuid.New().String()
+	number := asStringDefault(v["complaint_number"], fmt.Sprintf("C-%s", id[:6]))
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO complaints (id, complaint_number, guest_stay_id, guest_id, category, priority, status, description, resolution, resolved_by, resolved_at, guest_feedback, created_by, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now(),now())`, id, number, nullableString(v["guest_stay_id"]), nullableString(v["guest_id"]), asStringDefault(v["category"], "Other"), asStringDefault(v["priority"], "medium"), asStringDefault(v["status"], "open"), asString(v["description"]), nullableString(v["resolution"]), nullableString(v["resolved_by"]), v["resolved_at"], nullableString(v["guest_feedback"]), nullableString(v["created_by"]))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	return response.Created(c, []map[string]interface{}{{"id": id}})
+}
+
+func (h *CompatHandler) insertMenuCategory(c *fiber.Ctx, v map[string]interface{}) error {
+	id := uuid.New().String()
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO menu_categories (id, name, description, display_order, is_active, created_at) VALUES ($1,$2,$3,$4,$5,now())`, id, asString(v["name"]), nullableString(v["description"]), asIntDefault(v["display_order"], 0), asBoolDefault(v["is_active"], true))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	return response.Created(c, []map[string]interface{}{{"id": id}})
+}
+
+func (h *CompatHandler) insertMenuItem(c *fiber.Ctx, v map[string]interface{}, single string) error {
+	id := uuid.New().String()
+	rows, err := h.pool.Query(c.Context(), `INSERT INTO menu_items (id, category_id, name, description, price, image_url, is_available, preparation_time, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),now()) RETURNING id, category_id, name, description, price, image_url, is_available, preparation_time, created_at, updated_at`, id, nullableString(v["category_id"]), asString(v["name"]), nullableString(v["description"]), asFloatDefault(v["price"], 0), nullableString(v["image_url"]), asBoolDefault(v["is_available"], true), asIntDefault(v["preparation_time"], 15))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	defer rows.Close()
+	items, err := scanMenuItemBasicMaps(rows)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	if single != "" && len(items) > 0 {
+		return response.Created(c, items[0])
+	}
+	return response.Created(c, items)
+}
+
+func (h *CompatHandler) insertMenuCustomization(c *fiber.Ctx, v map[string]interface{}) error {
+	id := uuid.New().String()
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO menu_item_customizations (id, menu_item_id, name, price, is_available, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,now(),now())`, id, asString(v["menu_item_id"]), asString(v["name"]), asFloatDefault(v["price"], 0), asBoolDefault(v["is_available"], true))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	return response.Created(c, []map[string]interface{}{{"id": id}})
+}
+
+func (h *CompatHandler) insertInventoryItem(c *fiber.Ctx, v map[string]interface{}) error {
+	id := uuid.New().String()
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO inventory_items (id, name, unit, current_stock, min_stock, cost_per_unit, is_perishable, expiry_date, supplier, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),now())`, id, asString(v["name"]), asStringDefault(v["unit"], "unit"), asFloatDefault(v["current_stock"], 0), asFloatDefault(v["min_stock"], 0), nullableFloat(v["cost_per_unit"]), asBoolDefault(v["is_perishable"], false), v["expiry_date"], nullableString(v["supplier"]))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	return response.Created(c, []map[string]interface{}{{"id": id}})
+}
+
+func (h *CompatHandler) updateComplaint(c *fiber.Ctx, id string, v map[string]interface{}) error {
+	return h.updateAllowed(c, "complaints", id, map[string]bool{"guest_stay_id": true, "guest_id": true, "category": true, "priority": true, "status": true, "description": true, "resolution": true, "resolved_by": true, "resolved_at": true, "guest_feedback": true, "created_by": true}, v)
+}
+
+func (h *CompatHandler) updateMenuCategory(c *fiber.Ctx, id string, v map[string]interface{}) error {
+	return h.updateAllowedWithoutTimestamp(c, "menu_categories", id, map[string]bool{"name": true, "description": true, "display_order": true, "is_active": true}, v)
+}
+
+func (h *CompatHandler) updateMenuItem(c *fiber.Ctx, id string, v map[string]interface{}) error {
+	return h.updateAllowed(c, "menu_items", id, map[string]bool{"category_id": true, "name": true, "description": true, "price": true, "image_url": true, "is_available": true, "preparation_time": true}, v)
+}
+
+func (h *CompatHandler) updateMenuCustomization(c *fiber.Ctx, id string, v map[string]interface{}) error {
+	return h.updateAllowed(c, "menu_item_customizations", id, map[string]bool{"menu_item_id": true, "name": true, "price": true, "is_available": true}, v)
+}
+
+func (h *CompatHandler) updateInventoryItem(c *fiber.Ctx, id string, v map[string]interface{}) error {
+	return h.updateAllowed(c, "inventory_items", id, map[string]bool{"name": true, "unit": true, "current_stock": true, "min_stock": true, "cost_per_unit": true, "is_perishable": true, "expiry_date": true, "supplier": true}, v)
+}
+
+func scanMenuItemBasicMaps(rows interface {
+	Next() bool
+	Scan(...interface{}) error
+	Err() error
+}) ([]map[string]interface{}, error) {
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, name string
+		var categoryID, description, imageURL *string
+		var price float64
+		var isAvailable bool
+		var prep int
+		var createdAt, updatedAt interface{}
+		if err := rows.Scan(&id, &categoryID, &name, &description, &price, &imageURL, &isAvailable, &prep, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]interface{}{"id": id, "category_id": categoryID, "name": name, "description": description, "price": price, "image_url": imageURL, "is_available": isAvailable, "preparation_time": prep, "created_at": createdAt, "updated_at": updatedAt})
+	}
+	return items, rows.Err()
+}
+
 func (h *CompatHandler) updateAllowed(c *fiber.Ctx, table, id string, allowed map[string]bool, v map[string]interface{}) error {
+	return h.updateAllowedWithTimestamp(c, table, id, allowed, v, true)
+}
+
+func (h *CompatHandler) updateAllowedWithoutTimestamp(c *fiber.Ctx, table, id string, allowed map[string]bool, v map[string]interface{}) error {
+	return h.updateAllowedWithTimestamp(c, table, id, allowed, v, false)
+}
+
+func (h *CompatHandler) updateAllowedWithTimestamp(c *fiber.Ctx, table, id string, allowed map[string]bool, v map[string]interface{}, hasUpdatedAt bool) error {
 	set := []string{}
 	args := []interface{}{}
 	for key, value := range v {
@@ -451,7 +731,11 @@ func (h *CompatHandler) updateAllowed(c *fiber.Ctx, table, id string, allowed ma
 		return response.OK(c, []map[string]interface{}{})
 	}
 	args = append(args, id)
-	q := fmt.Sprintf("UPDATE %s SET %s, updated_at = now() WHERE id = $%d", table, strings.Join(set, ", "), len(args))
+	setSQL := strings.Join(set, ", ")
+	if hasUpdatedAt {
+		setSQL += ", updated_at = now()"
+	}
+	q := fmt.Sprintf("UPDATE %s SET %s WHERE id = $%d", table, setSQL, len(args))
 	if _, err := h.pool.Exec(c.Context(), q, args...); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -532,6 +816,18 @@ func asFloatDefault(v interface{}, fallback float64) float64 {
 		return float64(n)
 	case string:
 		if parsed, err := strconv.ParseFloat(n, 64); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func asBoolDefault(v interface{}, fallback bool) bool {
+	switch b := v.(type) {
+	case bool:
+		return b
+	case string:
+		if parsed, err := strconv.ParseBool(b); err == nil {
 			return parsed
 		}
 	}
