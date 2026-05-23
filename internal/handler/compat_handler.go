@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -63,6 +64,8 @@ func (h *CompatHandler) Select(c *fiber.Ctx) error {
 		return h.selectMenuCustomizations(c, filters)
 	case "inventory_items":
 		return h.selectInventoryItems(c, filters)
+	case "guest_preferences":
+		return h.selectGuestPreferences(c, filters)
 	default:
 		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility table: %s", table))
 	}
@@ -94,6 +97,8 @@ func (h *CompatHandler) Insert(c *fiber.Ctx) error {
 		return h.insertMenuCustomization(c, values)
 	case "inventory_items":
 		return h.insertInventoryItem(c, values)
+	case "guest_preferences":
+		return h.insertGuestPreferences(c, values, payload.Single)
 	default:
 		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility insert table: %s", table))
 	}
@@ -129,6 +134,9 @@ func (h *CompatHandler) Update(c *fiber.Ctx) error {
 		return h.updateMenuCustomization(c, id, values)
 	case "inventory_items":
 		return h.updateInventoryItem(c, id, values)
+	case "guest_preferences":
+		userID, _ := stringFilter(payload.Filters, "user_id")
+		return h.updateGuestPreferences(c, id, userID, values)
 	default:
 		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility update table: %s", table))
 	}
@@ -156,7 +164,7 @@ func (h *CompatHandler) Delete(c *fiber.Ctx) error {
 			return response.Error(c, fiber.StatusBadRequest, err.Error())
 		}
 		return response.OK(c, []map[string]interface{}{})
-	case "complaints", "menu_categories", "menu_items", "menu_item_customizations", "inventory_items":
+	case "complaints", "menu_categories", "menu_items", "menu_item_customizations", "inventory_items", "guest_preferences":
 		if _, err := h.pool.Exec(c.Context(), fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, table), id); err != nil {
 			return response.Error(c, fiber.StatusBadRequest, err.Error())
 		}
@@ -614,6 +622,41 @@ func (h *CompatHandler) selectInventoryItems(c *fiber.Ctx, filters []compatFilte
 	return response.OK(c, items)
 }
 
+func (h *CompatHandler) selectGuestPreferences(c *fiber.Ctx, filters []compatFilter) error {
+	q := `SELECT id, user_id, dietary_restrictions, allergies, favorite_categories, notes, created_at, updated_at FROM guest_preferences`
+	args := []interface{}{}
+	if v, ok := filterValue(filters, "user_id"); ok {
+		q += " WHERE user_id = $1"
+		args = append(args, v)
+	}
+	q += " ORDER BY created_at DESC"
+	rows, err := h.pool.Query(c.Context(), q, args...)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, userID string
+		var dietary, allergies, favorites []string
+		var notes *string
+		var createdAt, updatedAt interface{}
+		if err := rows.Scan(&id, &userID, &dietary, &allergies, &favorites, &notes, &createdAt, &updatedAt); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		country, currency, cleanNotes := splitPreferenceNotes(notes)
+		items = append(items, map[string]interface{}{"id": id, "user_id": userID, "dietary_restrictions": dietary, "allergies": allergies, "favorite_categories": favorites, "country": country, "currency": currency, "notes": notes, "created_at": createdAt, "updated_at": updatedAt})
+		items[len(items)-1]["notes"] = cleanNotes
+	}
+	if singleMode(c) != "" {
+		if len(items) == 0 {
+			return response.OK(c, nil)
+		}
+		return response.OK(c, items[0])
+	}
+	return response.OK(c, items)
+}
+
 func (h *CompatHandler) insertComplaint(c *fiber.Ctx, v map[string]interface{}) error {
 	id := uuid.New().String()
 	number := asStringDefault(v["complaint_number"], fmt.Sprintf("C-%s", id[:6]))
@@ -668,6 +711,25 @@ func (h *CompatHandler) insertInventoryItem(c *fiber.Ctx, v map[string]interface
 	return response.Created(c, []map[string]interface{}{{"id": id}})
 }
 
+func (h *CompatHandler) insertGuestPreferences(c *fiber.Ctx, v map[string]interface{}, single string) error {
+	id := uuid.New().String()
+	notes := mergePreferenceNotes(nullableString(v["notes"]), asStringDefault(v["country"], "United States"), asStringDefault(v["currency"], "USD"))
+	rows, err := h.pool.Query(c.Context(), `INSERT INTO guest_preferences (id, user_id, dietary_restrictions, allergies, favorite_categories, notes, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,now(),now()) ON CONFLICT (user_id) DO UPDATE SET dietary_restrictions = EXCLUDED.dietary_restrictions, allergies = EXCLUDED.allergies, favorite_categories = EXCLUDED.favorite_categories, notes = EXCLUDED.notes, updated_at = now() RETURNING id, user_id, dietary_restrictions, allergies, favorite_categories, notes, created_at, updated_at`,
+		id, asString(v["user_id"]), asStringSlice(v["dietary_restrictions"]), asStringSlice(v["allergies"]), asStringSlice(v["favorite_categories"]), notes)
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	defer rows.Close()
+	items, err := scanGuestPreferenceMaps(rows)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	if single != "" && len(items) > 0 {
+		return response.Created(c, items[0])
+	}
+	return response.Created(c, items)
+}
+
 func (h *CompatHandler) updateComplaint(c *fiber.Ctx, id string, v map[string]interface{}) error {
 	return h.updateAllowed(c, "complaints", id, map[string]bool{"guest_stay_id": true, "guest_id": true, "category": true, "priority": true, "status": true, "description": true, "resolution": true, "resolved_by": true, "resolved_at": true, "guest_feedback": true, "created_by": true}, v)
 }
@@ -686,6 +748,43 @@ func (h *CompatHandler) updateMenuCustomization(c *fiber.Ctx, id string, v map[s
 
 func (h *CompatHandler) updateInventoryItem(c *fiber.Ctx, id string, v map[string]interface{}) error {
 	return h.updateAllowed(c, "inventory_items", id, map[string]bool{"name": true, "unit": true, "current_stock": true, "min_stock": true, "cost_per_unit": true, "is_perishable": true, "expiry_date": true, "supplier": true}, v)
+}
+
+func (h *CompatHandler) updateGuestPreferences(c *fiber.Ctx, id string, userID string, v map[string]interface{}) error {
+	if _, hasCountry := v["country"]; hasCountry {
+		v["notes"] = mergePreferenceNotes(nullableString(v["notes"]), asStringDefault(v["country"], "United States"), asStringDefault(v["currency"], "USD"))
+		delete(v, "country")
+		delete(v, "currency")
+	}
+	allowed := map[string]bool{"dietary_restrictions": true, "allergies": true, "favorite_categories": true, "notes": true}
+	if id != "" {
+		return h.updateAllowed(c, "guest_preferences", id, allowed, v)
+	}
+	if userID == "" {
+		return response.Error(c, fiber.StatusBadRequest, "id or user_id filter is required")
+	}
+	return h.updateAllowedByColumn(c, "guest_preferences", "user_id", userID, allowed, v)
+}
+
+func scanGuestPreferenceMaps(rows interface {
+	Next() bool
+	Scan(...interface{}) error
+	Err() error
+}) ([]map[string]interface{}, error) {
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, userID string
+		var dietary, allergies, favorites []string
+		var notes *string
+		var createdAt, updatedAt interface{}
+		if err := rows.Scan(&id, &userID, &dietary, &allergies, &favorites, &notes, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		country, currency, cleanNotes := splitPreferenceNotes(notes)
+		items = append(items, map[string]interface{}{"id": id, "user_id": userID, "dietary_restrictions": dietary, "allergies": allergies, "favorite_categories": favorites, "country": country, "currency": currency, "notes": notes, "created_at": createdAt, "updated_at": updatedAt})
+		items[len(items)-1]["notes"] = cleanNotes
+	}
+	return items, rows.Err()
 }
 
 func scanMenuItemBasicMaps(rows interface {
@@ -713,11 +812,19 @@ func (h *CompatHandler) updateAllowed(c *fiber.Ctx, table, id string, allowed ma
 	return h.updateAllowedWithTimestamp(c, table, id, allowed, v, true)
 }
 
+func (h *CompatHandler) updateAllowedByColumn(c *fiber.Ctx, table, column, value string, allowed map[string]bool, v map[string]interface{}) error {
+	return h.updateAllowedByColumnWithTimestamp(c, table, column, value, allowed, v, true)
+}
+
 func (h *CompatHandler) updateAllowedWithoutTimestamp(c *fiber.Ctx, table, id string, allowed map[string]bool, v map[string]interface{}) error {
 	return h.updateAllowedWithTimestamp(c, table, id, allowed, v, false)
 }
 
 func (h *CompatHandler) updateAllowedWithTimestamp(c *fiber.Ctx, table, id string, allowed map[string]bool, v map[string]interface{}, hasUpdatedAt bool) error {
+	return h.updateAllowedByColumnWithTimestamp(c, table, "id", id, allowed, v, hasUpdatedAt)
+}
+
+func (h *CompatHandler) updateAllowedByColumnWithTimestamp(c *fiber.Ctx, table, column, value string, allowed map[string]bool, v map[string]interface{}, hasUpdatedAt bool) error {
 	set := []string{}
 	args := []interface{}{}
 	for key, value := range v {
@@ -730,12 +837,12 @@ func (h *CompatHandler) updateAllowedWithTimestamp(c *fiber.Ctx, table, id strin
 	if len(set) == 0 {
 		return response.OK(c, []map[string]interface{}{})
 	}
-	args = append(args, id)
+	args = append(args, value)
 	setSQL := strings.Join(set, ", ")
 	if hasUpdatedAt {
 		setSQL += ", updated_at = now()"
 	}
-	q := fmt.Sprintf("UPDATE %s SET %s WHERE id = $%d", table, setSQL, len(args))
+	q := fmt.Sprintf("UPDATE %s SET %s WHERE %s = $%d", table, setSQL, column, len(args))
 	if _, err := h.pool.Exec(c.Context(), q, args...); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -792,6 +899,55 @@ func nullableString(v interface{}) interface{} {
 		return s
 	}
 	return nil
+}
+
+var preferenceMetaPattern = regexp.MustCompile(`(?s)^__currency_preferences__=(\{.*?\})\n?`)
+
+type preferenceMeta struct {
+	Country  string `json:"country"`
+	Currency string `json:"currency"`
+}
+
+func splitPreferenceNotes(notes *string) (string, string, *string) {
+	country := "United States"
+	currency := "USD"
+	if notes == nil || *notes == "" {
+		return country, currency, notes
+	}
+	text := *notes
+	matches := preferenceMetaPattern.FindStringSubmatch(text)
+	if len(matches) == 2 {
+		var meta preferenceMeta
+		if json.Unmarshal([]byte(matches[1]), &meta) == nil {
+			if strings.TrimSpace(meta.Country) != "" {
+				country = meta.Country
+			}
+			if strings.TrimSpace(meta.Currency) != "" {
+				currency = meta.Currency
+			}
+		}
+		text = preferenceMetaPattern.ReplaceAllString(text, "")
+	}
+	text = strings.TrimLeft(text, "\r\n")
+	if text == "" {
+		return country, currency, nil
+	}
+	return country, currency, &text
+}
+
+func mergePreferenceNotes(rawNotes interface{}, country, currency string) interface{} {
+	var clean *string
+	switch notes := rawNotes.(type) {
+	case *string:
+		_, _, clean = splitPreferenceNotes(notes)
+	case string:
+		_, _, clean = splitPreferenceNotes(&notes)
+	}
+	meta, _ := json.Marshal(preferenceMeta{Country: country, Currency: currency})
+	if clean == nil || *clean == "" {
+		return fmt.Sprintf("__currency_preferences__=%s", string(meta))
+	}
+	return fmt.Sprintf("__currency_preferences__=%s\n%s", string(meta), *clean)
 }
 
 func asIntDefault(v interface{}, fallback int) int {

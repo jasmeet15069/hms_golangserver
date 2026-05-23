@@ -179,10 +179,15 @@ CREATE TABLE IF NOT EXISTS guest_preferences (
   dietary_restrictions TEXT[] NOT NULL DEFAULT '{}',
   allergies TEXT[] NOT NULL DEFAULT '{}',
   favorite_categories TEXT[] NOT NULL DEFAULT '{}',
+  country TEXT NOT NULL DEFAULT 'United States',
+  currency TEXT NOT NULL DEFAULT 'USD',
   notes TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE guest_preferences ADD COLUMN IF NOT EXISTS country TEXT NOT NULL DEFAULT 'United States';
+ALTER TABLE guest_preferences ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'USD';
 
 CREATE INDEX IF NOT EXISTS idx_rooms_status ON rooms(status);
 CREATE INDEX IF NOT EXISTS idx_rooms_status_price ON rooms(status, price_per_night);
