@@ -90,6 +90,9 @@ func (s *paymentService) BookingCheckout(ctx context.Context, req BookingCheckou
 	if s.cfg.Stripe.SecretKey == "" {
 		return nil, fmt.Errorf("Stripe secret key is not configured")
 	}
+	if err := s.ensureStripeChargesEnabled(ctx); err != nil {
+		return nil, err
+	}
 	lockKey := fmt.Sprintf("lock:booking:%s:%s:%s:%s", req.UserID, req.RoomID, req.CheckInDate.Format("2006-01-02"), req.CheckOutDate.Format("2006-01-02"))
 	locked, err := s.cache.SetNX(ctx, lockKey, "1", cache.TTLLock)
 	if err != nil {
@@ -204,6 +207,9 @@ func (s *paymentService) BookingCheckout(ctx context.Context, req BookingCheckou
 func (s *paymentService) PaymentCheckout(ctx context.Context, paymentID uuid.UUID, currency, country, originURL string) (*CheckoutResult, error) {
 	if s.cfg.Stripe.SecretKey == "" {
 		return nil, fmt.Errorf("Stripe secret key is not configured")
+	}
+	if err := s.ensureStripeChargesEnabled(ctx); err != nil {
+		return nil, err
 	}
 	lockKey := "lock:payment:" + paymentID.String()
 	locked, err := s.cache.SetNX(ctx, lockKey, "1", cache.TTLLock)
@@ -454,6 +460,35 @@ func (s *paymentService) createStripeSession(ctx context.Context, p stripeSessio
 		return nil, fmt.Errorf("stripe: invalid session response")
 	}
 	return &session, nil
+}
+
+func (s *paymentService) ensureStripeChargesEnabled(ctx context.Context) error {
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(reqCtx, http.MethodGet, "https://api.stripe.com/v1/account", nil)
+	req.Header.Set("Authorization", "Bearer "+s.cfg.Stripe.SecretKey)
+	req.Header.Set("User-Agent", "HotelHarmony/2.0")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("unable to verify Stripe account status: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Stripe account status check failed: %s", string(body))
+	}
+
+	var account struct {
+		ChargesEnabled bool `json:"charges_enabled"`
+	}
+	if err := json.Unmarshal(body, &account); err != nil {
+		return fmt.Errorf("Stripe account status response was invalid")
+	}
+	if !account.ChargesEnabled {
+		return fmt.Errorf("Stripe live payments are not enabled on this account yet. Complete Stripe account activation / KYC in the Stripe dashboard before accepting card payments")
+	}
+	return nil
 }
 
 func stripeMinorAmount(amount float64, currency string) int64 {
