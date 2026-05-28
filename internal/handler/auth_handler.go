@@ -97,14 +97,11 @@ func (h *AuthHandler) UpdatePassword(c *fiber.Ctx) error {
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid user id")
 	}
-	var updateErr error
-	if req.CurrentPassword != "" {
-		updateErr = h.auth.UpdatePasswordWithCurrent(c.Context(), id, req.CurrentPassword, req.Password)
-	} else {
-		updateErr = h.auth.UpdatePassword(c.Context(), id, req.Password)
+	if req.CurrentPassword == "" {
+		return response.Error(c, fiber.StatusBadRequest, "current password is required")
 	}
-	if updateErr != nil {
-		return response.Error(c, fiber.StatusBadRequest, updateErr.Error())
+	if err := h.auth.UpdatePasswordWithCurrent(c.Context(), id, req.CurrentPassword, req.Password); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
 	return response.OK(c, map[string]string{"status": "updated"})
 }

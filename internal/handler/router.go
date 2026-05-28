@@ -14,6 +14,7 @@ type Handlers struct {
 	Dashboard *DashboardHandler
 	Rooms     *RoomHandler
 	Ops       *OperationsHandler
+	AI        *AIHandler
 	Compat    *CompatHandler
 }
 
@@ -40,6 +41,9 @@ func Register(app *fiber.App, h Handlers) {
 				"POST /api/housekeeping/guest-requests",
 				"GET /api/plan/limits",
 				"GET /api/reports/occupancy",
+				"POST /api/ai/chat",
+				"POST /api/functions/ai-menu-suggestions",
+				"POST /api/functions/ai-complaint-analysis",
 				"GET /api/settings/payment",
 				"PUT /api/settings/payment",
 			},
@@ -66,6 +70,9 @@ func Register(app *fiber.App, h Handlers) {
 	}
 	if h.Ops != nil {
 		h.Ops.Register(api)
+	}
+	if h.AI != nil {
+		h.AI.Register(api)
 	}
 	if h.Compat != nil {
 		h.Compat.Register(api)

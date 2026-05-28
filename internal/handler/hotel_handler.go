@@ -7,17 +7,23 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 
+	"github.com/hotelharmony/api/internal/config"
 	"github.com/hotelharmony/api/internal/domain"
 	"github.com/hotelharmony/api/internal/repository/postgres"
 	"github.com/hotelharmony/api/pkg/response"
 )
 
 type HotelHandler struct {
-	hotels postgres.HotelRepository
+	hotels    postgres.HotelRepository
+	secretKey string
 }
 
-func NewHotelHandler(hotels postgres.HotelRepository) *HotelHandler {
-	return &HotelHandler{hotels: hotels}
+func NewHotelHandler(hotels postgres.HotelRepository, cfg *config.Config) *HotelHandler {
+	secret := ""
+	if cfg != nil {
+		secret = cfg.Auth.AccessTokenSecret
+	}
+	return &HotelHandler{hotels: hotels, secretKey: secret}
 }
 
 func (h *HotelHandler) Register(r fiber.Router) {
@@ -160,6 +166,10 @@ type updateBrandingRequest struct {
 }
 
 func (h *HotelHandler) UpdateBranding(c *fiber.Ctx) error {
+	if err := requireAnyRoleFromToken(c, h.secretKey, "platform_admin", "hotel_admin", "super_admin"); err != nil {
+		return err
+	}
+
 	var req updateBrandingRequest
 	if err := c.BodyParser(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body")

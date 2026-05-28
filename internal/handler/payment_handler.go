@@ -6,16 +6,22 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 
+	"github.com/hotelharmony/api/internal/config"
 	"github.com/hotelharmony/api/internal/service"
 	"github.com/hotelharmony/api/pkg/response"
 )
 
 type PaymentHandler struct {
-	payments service.PaymentService
+	payments  service.PaymentService
+	secretKey string
 }
 
-func NewPaymentHandler(payments service.PaymentService) *PaymentHandler {
-	return &PaymentHandler{payments: payments}
+func NewPaymentHandler(payments service.PaymentService, cfg *config.Config) *PaymentHandler {
+	secret := ""
+	if cfg != nil {
+		secret = cfg.Auth.AccessTokenSecret
+	}
+	return &PaymentHandler{payments: payments, secretKey: secret}
 }
 
 func (h *PaymentHandler) Register(r fiber.Router) {
@@ -53,6 +59,10 @@ type bookingCheckoutRequest struct {
 }
 
 func (h *PaymentHandler) BookingCheckout(c *fiber.Ctx) error {
+	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
+		return err
+	}
+
 	var req bookingCheckoutRequest
 	if err := c.BodyParser(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body")
@@ -98,6 +108,10 @@ type paymentCheckoutRequest struct {
 }
 
 func (h *PaymentHandler) PaymentCheckout(c *fiber.Ctx) error {
+	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
+		return err
+	}
+
 	var req paymentCheckoutRequest
 	if err := c.BodyParser(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body")
@@ -119,6 +133,10 @@ type completePaymentRequest struct {
 }
 
 func (h *PaymentHandler) CompletePayment(c *fiber.Ctx) error {
+	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
+		return err
+	}
+
 	var req completePaymentRequest
 	if err := c.BodyParser(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body")

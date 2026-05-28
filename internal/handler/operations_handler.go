@@ -54,6 +54,10 @@ type housekeepingRequest struct {
 }
 
 func (h *OperationsHandler) CreateGuestHousekeepingRequest(c *fiber.Ctx) error {
+	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
+		return err
+	}
+
 	var req housekeepingRequest
 	if err := c.BodyParser(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body")

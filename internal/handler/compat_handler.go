@@ -11,16 +11,22 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/hotelharmony/api/internal/config"
 	"github.com/hotelharmony/api/internal/repository/postgres"
 	"github.com/hotelharmony/api/pkg/response"
 )
 
 type CompatHandler struct {
-	pool *pgxpool.Pool
+	pool      *pgxpool.Pool
+	secretKey string
 }
 
-func NewCompatHandler(pool *pgxpool.Pool) *CompatHandler {
-	return &CompatHandler{pool: pool}
+func NewCompatHandler(pool *pgxpool.Pool, cfg *config.Config) *CompatHandler {
+	secret := ""
+	if cfg != nil {
+		secret = cfg.Auth.AccessTokenSecret
+	}
+	return &CompatHandler{pool: pool, secretKey: secret}
 }
 
 func (h *CompatHandler) Register(r fiber.Router) {
@@ -43,6 +49,10 @@ type compatMutation struct {
 }
 
 func (h *CompatHandler) Select(c *fiber.Ctx) error {
+	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
+		return err
+	}
+
 	table := c.Params("table")
 	filters := parseCompatFilters(c.Query("filters"))
 
@@ -93,6 +103,10 @@ func (h *CompatHandler) Select(c *fiber.Ctx) error {
 }
 
 func (h *CompatHandler) Insert(c *fiber.Ctx) error {
+	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
+		return err
+	}
+
 	table := c.Params("table")
 	payload, err := parseMutation(c)
 	if err != nil {
@@ -144,6 +158,10 @@ func (h *CompatHandler) Insert(c *fiber.Ctx) error {
 }
 
 func (h *CompatHandler) Update(c *fiber.Ctx) error {
+	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
+		return err
+	}
+
 	table := c.Params("table")
 	payload, err := parseMutation(c)
 	if err != nil {
@@ -197,6 +215,10 @@ func (h *CompatHandler) Update(c *fiber.Ctx) error {
 }
 
 func (h *CompatHandler) Delete(c *fiber.Ctx) error {
+	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
+		return err
+	}
+
 	table := c.Params("table")
 	payload, err := parseMutation(c)
 	if err != nil {

@@ -71,6 +71,7 @@ func main() {
 
 	authSvc := service.NewAuthService(userRepo, c, cfg)
 	paymentSvc := service.NewPaymentService(roomRepo, paymentRepo, c, cfg, zlog)
+	aiSvc := service.NewAIService(c, cfg, zlog)
 
 	app := fiber.New(fiber.Config{
 		AppName:      cfg.App.Name,
@@ -92,7 +93,7 @@ func main() {
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     cfg.App.FrontendURL + ",http://localhost:8080,http://localhost:8081,http://127.0.0.1:8080,http://127.0.0.1:8081",
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
-		AllowMethods:     "GET,POST,PATCH,DELETE,OPTIONS",
+		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 		AllowCredentials: true,
 	}))
 
@@ -100,12 +101,13 @@ func main() {
 	handler.Register(app, handler.Handlers{
 		Health:    handler.NewHealthHandler(db, c),
 		Auth:      handler.NewAuthHandler(authSvc, v),
-		Hotels:    handler.NewHotelHandler(hotelRepo),
-		Payments:  handler.NewPaymentHandler(paymentSvc),
+		Hotels:    handler.NewHotelHandler(hotelRepo, cfg),
+		Payments:  handler.NewPaymentHandler(paymentSvc, cfg),
 		Dashboard: handler.NewDashboardHandler(dashboardRepo, c),
 		Rooms:     handler.NewRoomHandler(roomRepo, c),
 		Ops:       handler.NewOperationsHandler(db.Pool, cfg),
-		Compat:    handler.NewCompatHandler(db.Pool),
+		AI:        handler.NewAIHandler(aiSvc, roomRepo, dashboardRepo, cfg),
+		Compat:    handler.NewCompatHandler(db.Pool, cfg),
 	})
 
 	errCh := make(chan error, 1)
