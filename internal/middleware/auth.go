@@ -11,8 +11,10 @@ import (
 )
 
 const (
-	LocalUserIDKey = "user_id"
-	LocalRolesKey  = "roles"
+	LocalUserIDKey        = "user_id"
+	LocalHotelIDKey       = "hotel_id"
+	LocalRolesKey         = "roles"
+	LocalPlatformAdminKey = "platform_admin"
 )
 
 func Auth(authSvc service.AuthService) fiber.Handler {
@@ -28,7 +30,11 @@ func Auth(authSvc service.AuthService) fiber.Handler {
 			return response.Error(c, fiber.StatusUnauthorized, err.Error())
 		}
 		c.Locals(LocalUserIDKey, user.ID)
+		if user.HotelID != nil {
+			c.Locals(LocalHotelIDKey, *user.HotelID)
+		}
 		c.Locals(LocalRolesKey, roles)
+		c.Locals(LocalPlatformAdminKey, user.PlatformAdmin)
 		return c.Next()
 	}
 }

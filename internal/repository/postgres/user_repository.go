@@ -47,16 +47,16 @@ func NewUserRepository(db *DB) UserRepository {
 
 func (r *userRepository) Create(ctx context.Context, email, passwordHash string) (*domain.User, error) {
 	const q = `
-		INSERT INTO users (id, email, password_hash, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $4)
-		RETURNING id, email, password_hash, created_at, updated_at`
+		INSERT INTO users (id, hotel_id, email, password_hash, platform_admin, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, false, $5, $5)
+		RETURNING id, hotel_id, email, password_hash, platform_admin, created_at, updated_at`
 
 	id := uuid.New()
 	now := time.Now().UTC()
 
 	u := &domain.User{}
-	err := r.db.Pool.QueryRow(ctx, q, id, email, passwordHash, now).
-		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt, &u.UpdatedAt)
+	err := r.db.Pool.QueryRow(ctx, q, id, DemoHotelID, email, passwordHash, now).
+		Scan(&u.ID, &u.HotelID, &u.Email, &u.PasswordHash, &u.PlatformAdmin, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrConflict
@@ -67,10 +67,10 @@ func (r *userRepository) Create(ctx context.Context, email, passwordHash string)
 }
 
 func (r *userRepository) FindByEmail(ctx context.Context, email string) (*domain.User, error) {
-	const q = `SELECT id, email, password_hash, created_at, updated_at FROM users WHERE email = $1`
+	const q = `SELECT id, hotel_id, email, password_hash, platform_admin, created_at, updated_at FROM users WHERE email = $1`
 	u := &domain.User{}
 	err := r.db.Pool.QueryRow(ctx, q, email).
-		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt, &u.UpdatedAt)
+		Scan(&u.ID, &u.HotelID, &u.Email, &u.PasswordHash, &u.PlatformAdmin, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -81,10 +81,10 @@ func (r *userRepository) FindByEmail(ctx context.Context, email string) (*domain
 }
 
 func (r *userRepository) FindByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
-	const q = `SELECT id, email, password_hash, created_at, updated_at FROM users WHERE id = $1`
+	const q = `SELECT id, hotel_id, email, password_hash, platform_admin, created_at, updated_at FROM users WHERE id = $1`
 	u := &domain.User{}
 	err := r.db.Pool.QueryRow(ctx, q, id).
-		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt, &u.UpdatedAt)
+		Scan(&u.ID, &u.HotelID, &u.Email, &u.PasswordHash, &u.PlatformAdmin, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -102,14 +102,14 @@ func (r *userRepository) UpdatePassword(ctx context.Context, id uuid.UUID, passw
 
 func (r *userRepository) CreateProfile(ctx context.Context, userID uuid.UUID, fullName string, phone *string) (*domain.Profile, error) {
 	const q = `
-		INSERT INTO profiles (id, user_id, full_name, phone, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $5)
-		RETURNING id, user_id, full_name, phone, avatar_url, created_at, updated_at`
+		INSERT INTO profiles (id, hotel_id, user_id, full_name, phone, created_at, updated_at)
+		VALUES ($1, (SELECT hotel_id FROM users WHERE id = $2), $2, $3, $4, $5, $5)
+		RETURNING id, hotel_id, user_id, full_name, phone, avatar_url, created_at, updated_at`
 	id := uuid.New()
 	now := time.Now().UTC()
 	p := &domain.Profile{}
 	err := r.db.Pool.QueryRow(ctx, q, id, userID, fullName, phone, now).
-		Scan(&p.ID, &p.UserID, &p.FullName, &p.Phone, &p.AvatarURL, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.HotelID, &p.UserID, &p.FullName, &p.Phone, &p.AvatarURL, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("userRepo.CreateProfile: %w", err)
 	}
@@ -117,10 +117,10 @@ func (r *userRepository) CreateProfile(ctx context.Context, userID uuid.UUID, fu
 }
 
 func (r *userRepository) FindProfileByUserID(ctx context.Context, userID uuid.UUID) (*domain.Profile, error) {
-	const q = `SELECT id, user_id, full_name, phone, avatar_url, created_at, updated_at FROM profiles WHERE user_id = $1`
+	const q = `SELECT id, hotel_id, user_id, full_name, phone, avatar_url, created_at, updated_at FROM profiles WHERE user_id = $1`
 	p := &domain.Profile{}
 	err := r.db.Pool.QueryRow(ctx, q, userID).
-		Scan(&p.ID, &p.UserID, &p.FullName, &p.Phone, &p.AvatarURL, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.HotelID, &p.UserID, &p.FullName, &p.Phone, &p.AvatarURL, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -154,8 +154,8 @@ func (r *userRepository) UpdateProfile(ctx context.Context, userID uuid.UUID, fi
 
 func (r *userRepository) AddRole(ctx context.Context, userID uuid.UUID, role domain.UserRole) error {
 	const q = `
-		INSERT INTO user_roles (id, user_id, role, created_at)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO user_roles (id, hotel_id, user_id, role, created_at)
+		VALUES ($1, (SELECT hotel_id FROM users WHERE id = $2), $2, $3, $4)
 		ON CONFLICT (user_id, role) DO NOTHING`
 	_, err := r.db.Pool.Exec(ctx, q, uuid.New(), userID, role, time.Now().UTC())
 	return err
@@ -182,8 +182,8 @@ func (r *userRepository) GetRoles(ctx context.Context, userID uuid.UUID) ([]doma
 
 func (r *userRepository) CreatePreferences(ctx context.Context, prefs *domain.GuestPreferences) error {
 	const q = `
-		INSERT INTO guest_preferences (id, user_id, dietary_restrictions, allergies, favorite_categories, notes, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`
+		INSERT INTO guest_preferences (id, hotel_id, user_id, dietary_restrictions, allergies, favorite_categories, notes, created_at, updated_at)
+		VALUES ($1, (SELECT hotel_id FROM users WHERE id = $2), $2, $3, $4, $5, $6, $7, $7)`
 	_, err := r.db.Pool.Exec(ctx, q,
 		uuid.New(), prefs.UserID,
 		prefs.DietaryRestrictions, prefs.Allergies, prefs.FavoriteCategories,
@@ -194,8 +194,8 @@ func (r *userRepository) CreatePreferences(ctx context.Context, prefs *domain.Gu
 
 func (r *userRepository) UpsertPreferences(ctx context.Context, prefs *domain.GuestPreferences) error {
 	const q = `
-		INSERT INTO guest_preferences (id, user_id, dietary_restrictions, allergies, favorite_categories, notes, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+		INSERT INTO guest_preferences (id, hotel_id, user_id, dietary_restrictions, allergies, favorite_categories, notes, created_at, updated_at)
+		VALUES ($1, (SELECT hotel_id FROM users WHERE id = $2), $2, $3, $4, $5, $6, $7, $7)
 		ON CONFLICT (user_id) DO UPDATE
 		  SET dietary_restrictions = EXCLUDED.dietary_restrictions,
 		      allergies = EXCLUDED.allergies,

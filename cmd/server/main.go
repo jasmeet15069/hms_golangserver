@@ -64,6 +64,7 @@ func main() {
 	}
 
 	userRepo := postgres.NewUserRepository(db)
+	hotelRepo := postgres.NewHotelRepository(db)
 	roomRepo := postgres.NewRoomRepository(db)
 	paymentRepo := postgres.NewPaymentRepository(db)
 	dashboardRepo := postgres.NewDashboardRepository(db)
@@ -99,9 +100,11 @@ func main() {
 	handler.Register(app, handler.Handlers{
 		Health:    handler.NewHealthHandler(db, c),
 		Auth:      handler.NewAuthHandler(authSvc, v),
+		Hotels:    handler.NewHotelHandler(hotelRepo),
 		Payments:  handler.NewPaymentHandler(paymentSvc),
 		Dashboard: handler.NewDashboardHandler(dashboardRepo, c),
 		Rooms:     handler.NewRoomHandler(roomRepo, c),
+		Ops:       handler.NewOperationsHandler(db.Pool, cfg),
 		Compat:    handler.NewCompatHandler(db.Pool),
 	})
 

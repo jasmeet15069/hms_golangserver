@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/hotelharmony/api/internal/repository/postgres"
 	"github.com/hotelharmony/api/pkg/response"
 )
 
@@ -76,6 +77,14 @@ func (h *CompatHandler) Select(c *fiber.Ctx) error {
 		return h.selectPaymentSettings(c, filters)
 	case "staff_shifts":
 		return h.selectStaffShifts(c, filters)
+	case "housekeeping_assignments":
+		return h.selectHousekeepingAssignments(c, filters)
+	case "work_orders":
+		return h.selectWorkOrders(c, filters)
+	case "folios":
+		return h.selectFolios(c, filters)
+	case "folio_charges":
+		return h.selectFolioCharges(c, filters)
 	case "audit_logs":
 		return h.selectAuditLogs(c, filters)
 	default:
@@ -125,6 +134,10 @@ func (h *CompatHandler) Insert(c *fiber.Ctx) error {
 		return h.insertPaymentSetting(c, values)
 	case "staff_shifts":
 		return h.insertStaffShift(c, values)
+	case "housekeeping_assignments":
+		return h.insertHousekeepingAssignment(c, values)
+	case "work_orders":
+		return h.insertWorkOrder(c, values)
 	default:
 		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility insert table: %s", table))
 	}
@@ -174,6 +187,10 @@ func (h *CompatHandler) Update(c *fiber.Ctx) error {
 		return h.updatePaymentSetting(c, id, values)
 	case "staff_shifts":
 		return h.updateStaffShift(c, id, values)
+	case "housekeeping_assignments":
+		return h.updateHousekeepingAssignment(c, id, values)
+	case "work_orders":
+		return h.updateWorkOrder(c, id, values)
 	default:
 		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility update table: %s", table))
 	}
@@ -204,7 +221,7 @@ func (h *CompatHandler) Delete(c *fiber.Ctx) error {
 			return response.Error(c, fiber.StatusBadRequest, err.Error())
 		}
 		return response.OK(c, []map[string]interface{}{})
-	case "profiles", "complaints", "menu_categories", "menu_items", "inventory_items", "guest_preferences", "orders", "payments", "payment_settings", "staff_shifts":
+	case "profiles", "complaints", "menu_categories", "menu_items", "inventory_items", "guest_preferences", "orders", "payments", "payment_settings", "staff_shifts", "housekeeping_assignments", "work_orders":
 		if id == "" {
 			return response.Error(c, fiber.StatusBadRequest, "id filter is required")
 		}
@@ -573,10 +590,10 @@ func (h *CompatHandler) insertRoom(c *fiber.Ctx, v map[string]interface{}) error
 	status := asStringDefault(v["status"], "available")
 	amenities := asStringSlice(v["amenities"])
 
-	const q = `INSERT INTO rooms (id, room_number, room_type, floor, capacity, price_per_night, status, amenities, created_at, updated_at)
-	           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),now())
+	const q = `INSERT INTO rooms (id, hotel_id, room_number, room_type, floor, capacity, price_per_night, status, amenities, created_at, updated_at)
+	           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),now())
 	           RETURNING id, room_number, room_type, floor, capacity, price_per_night, status, amenities, created_at, updated_at`
-	rows, err := h.pool.Query(c.Context(), q, id, roomNumber, roomType, floor, capacity, price, status, amenities)
+	rows, err := h.pool.Query(c.Context(), q, id, postgres.DemoHotelID, roomNumber, roomType, floor, capacity, price, status, amenities)
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -600,13 +617,13 @@ func (h *CompatHandler) insertGuestStay(c *fiber.Ctx, v map[string]interface{}) 
 	id := uuid.New().String()
 	guestName := asStringDefault(v["guest_name"], "Guest")
 	const q = `INSERT INTO guest_stays (
-	             id, guest_id, room_id, guest_name, guest_email, guest_phone,
+	             id, hotel_id, guest_id, room_id, guest_name, guest_email, guest_phone,
 	             check_in_date, check_out_date, actual_check_in, actual_check_out,
 	             total_amount, notes, created_by, created_at, updated_at
-	           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now(),now())
+	           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now(),now())
 	           RETURNING id`
 	if _, err := h.pool.Exec(c.Context(), q,
-		id, nullableString(v["guest_id"]), asString(v["room_id"]), guestName,
+		id, postgres.DemoHotelID, nullableString(v["guest_id"]), asString(v["room_id"]), guestName,
 		nullableString(v["guest_email"]), nullableString(v["guest_phone"]),
 		v["check_in_date"], v["check_out_date"], v["actual_check_in"], v["actual_check_out"],
 		nullableFloat(v["total_amount"]), nullableString(v["notes"]), nullableString(v["created_by"]),
@@ -806,7 +823,7 @@ func (h *CompatHandler) selectGuestPreferences(c *fiber.Ctx, filters []compatFil
 func (h *CompatHandler) insertComplaint(c *fiber.Ctx, v map[string]interface{}) error {
 	id := uuid.New().String()
 	number := asStringDefault(v["complaint_number"], fmt.Sprintf("C-%s", id[:6]))
-	_, err := h.pool.Exec(c.Context(), `INSERT INTO complaints (id, complaint_number, guest_stay_id, guest_id, category, priority, status, description, resolution, resolved_by, resolved_at, guest_feedback, created_by, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now(),now())`, id, number, nullableString(v["guest_stay_id"]), nullableString(v["guest_id"]), asStringDefault(v["category"], "Other"), asStringDefault(v["priority"], "medium"), asStringDefault(v["status"], "open"), asString(v["description"]), nullableString(v["resolution"]), nullableString(v["resolved_by"]), v["resolved_at"], nullableString(v["guest_feedback"]), nullableString(v["created_by"]))
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO complaints (id, hotel_id, complaint_number, guest_stay_id, guest_id, category, priority, status, description, resolution, resolved_by, resolved_at, guest_feedback, created_by, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now(),now())`, id, postgres.DemoHotelID, number, nullableString(v["guest_stay_id"]), nullableString(v["guest_id"]), asStringDefault(v["category"], "Other"), asStringDefault(v["priority"], "medium"), asStringDefault(v["status"], "open"), asString(v["description"]), nullableString(v["resolution"]), nullableString(v["resolved_by"]), v["resolved_at"], nullableString(v["guest_feedback"]), nullableString(v["created_by"]))
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -815,7 +832,7 @@ func (h *CompatHandler) insertComplaint(c *fiber.Ctx, v map[string]interface{}) 
 
 func (h *CompatHandler) insertMenuCategory(c *fiber.Ctx, v map[string]interface{}) error {
 	id := uuid.New().String()
-	_, err := h.pool.Exec(c.Context(), `INSERT INTO menu_categories (id, name, description, display_order, is_active, created_at) VALUES ($1,$2,$3,$4,$5,now())`, id, asString(v["name"]), nullableString(v["description"]), asIntDefault(v["display_order"], 0), asBoolDefault(v["is_active"], true))
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO menu_categories (id, hotel_id, name, description, display_order, is_active, created_at) VALUES ($1,$2,$3,$4,$5,$6,now())`, id, postgres.DemoHotelID, asString(v["name"]), nullableString(v["description"]), asIntDefault(v["display_order"], 0), asBoolDefault(v["is_active"], true))
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -824,7 +841,7 @@ func (h *CompatHandler) insertMenuCategory(c *fiber.Ctx, v map[string]interface{
 
 func (h *CompatHandler) insertMenuItem(c *fiber.Ctx, v map[string]interface{}, single string) error {
 	id := uuid.New().String()
-	rows, err := h.pool.Query(c.Context(), `INSERT INTO menu_items (id, category_id, name, description, price, image_url, is_available, preparation_time, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),now()) RETURNING id, category_id, name, description, price, image_url, is_available, preparation_time, created_at, updated_at`, id, nullableString(v["category_id"]), asString(v["name"]), nullableString(v["description"]), asFloatDefault(v["price"], 0), nullableString(v["image_url"]), asBoolDefault(v["is_available"], true), asIntDefault(v["preparation_time"], 15))
+	rows, err := h.pool.Query(c.Context(), `INSERT INTO menu_items (id, hotel_id, category_id, name, description, price, image_url, is_available, preparation_time, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),now()) RETURNING id, category_id, name, description, price, image_url, is_available, preparation_time, created_at, updated_at`, id, postgres.DemoHotelID, nullableString(v["category_id"]), asString(v["name"]), nullableString(v["description"]), asFloatDefault(v["price"], 0), nullableString(v["image_url"]), asBoolDefault(v["is_available"], true), asIntDefault(v["preparation_time"], 15))
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -841,7 +858,7 @@ func (h *CompatHandler) insertMenuItem(c *fiber.Ctx, v map[string]interface{}, s
 
 func (h *CompatHandler) insertMenuCustomization(c *fiber.Ctx, v map[string]interface{}) error {
 	id := uuid.New().String()
-	_, err := h.pool.Exec(c.Context(), `INSERT INTO menu_item_customizations (id, menu_item_id, name, price, is_available, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,now(),now())`, id, asString(v["menu_item_id"]), asString(v["name"]), asFloatDefault(v["price"], 0), asBoolDefault(v["is_available"], true))
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO menu_item_customizations (id, hotel_id, menu_item_id, name, price, is_available, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,now(),now())`, id, postgres.DemoHotelID, asString(v["menu_item_id"]), asString(v["name"]), asFloatDefault(v["price"], 0), asBoolDefault(v["is_available"], true))
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -852,7 +869,7 @@ func (h *CompatHandler) insertMenuCustomizations(c *fiber.Ctx, values []map[stri
 	items := make([]map[string]interface{}, 0, len(values))
 	for _, v := range values {
 		id := uuid.New().String()
-		_, err := h.pool.Exec(c.Context(), `INSERT INTO menu_item_customizations (id, menu_item_id, name, price, is_available, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,now(),now())`, id, asString(v["menu_item_id"]), asString(v["name"]), asFloatDefault(v["price"], 0), asBoolDefault(v["is_available"], true))
+		_, err := h.pool.Exec(c.Context(), `INSERT INTO menu_item_customizations (id, hotel_id, menu_item_id, name, price, is_available, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,now(),now())`, id, postgres.DemoHotelID, asString(v["menu_item_id"]), asString(v["name"]), asFloatDefault(v["price"], 0), asBoolDefault(v["is_available"], true))
 		if err != nil {
 			return response.Error(c, fiber.StatusBadRequest, err.Error())
 		}
@@ -863,7 +880,7 @@ func (h *CompatHandler) insertMenuCustomizations(c *fiber.Ctx, values []map[stri
 
 func (h *CompatHandler) insertInventoryItem(c *fiber.Ctx, v map[string]interface{}) error {
 	id := uuid.New().String()
-	_, err := h.pool.Exec(c.Context(), `INSERT INTO inventory_items (id, name, unit, current_stock, min_stock, cost_per_unit, is_perishable, expiry_date, supplier, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),now())`, id, asString(v["name"]), asStringDefault(v["unit"], "unit"), asFloatDefault(v["current_stock"], 0), asFloatDefault(v["min_stock"], 0), nullableFloat(v["cost_per_unit"]), asBoolDefault(v["is_perishable"], false), v["expiry_date"], nullableString(v["supplier"]))
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO inventory_items (id, hotel_id, name, unit, current_stock, min_stock, cost_per_unit, is_perishable, expiry_date, supplier, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now(),now())`, id, postgres.DemoHotelID, asString(v["name"]), asStringDefault(v["unit"], "unit"), asFloatDefault(v["current_stock"], 0), asFloatDefault(v["min_stock"], 0), nullableFloat(v["cost_per_unit"]), asBoolDefault(v["is_perishable"], false), v["expiry_date"], nullableString(v["supplier"]))
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -873,8 +890,8 @@ func (h *CompatHandler) insertInventoryItem(c *fiber.Ctx, v map[string]interface
 func (h *CompatHandler) insertGuestPreferences(c *fiber.Ctx, v map[string]interface{}, single string) error {
 	id := uuid.New().String()
 	notes := mergePreferenceNotes(nullableString(v["notes"]), asStringDefault(v["country"], "United States"), asStringDefault(v["currency"], "USD"))
-	rows, err := h.pool.Query(c.Context(), `INSERT INTO guest_preferences (id, user_id, dietary_restrictions, allergies, favorite_categories, notes, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,now(),now()) ON CONFLICT (user_id) DO UPDATE SET dietary_restrictions = EXCLUDED.dietary_restrictions, allergies = EXCLUDED.allergies, favorite_categories = EXCLUDED.favorite_categories, notes = EXCLUDED.notes, updated_at = now() RETURNING id, user_id, dietary_restrictions, allergies, favorite_categories, notes, created_at, updated_at`,
-		id, asString(v["user_id"]), asStringSlice(v["dietary_restrictions"]), asStringSlice(v["allergies"]), asStringSlice(v["favorite_categories"]), notes)
+	rows, err := h.pool.Query(c.Context(), `INSERT INTO guest_preferences (id, hotel_id, user_id, dietary_restrictions, allergies, favorite_categories, notes, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,now(),now()) ON CONFLICT (user_id) DO UPDATE SET dietary_restrictions = EXCLUDED.dietary_restrictions, allergies = EXCLUDED.allergies, favorite_categories = EXCLUDED.favorite_categories, notes = EXCLUDED.notes, updated_at = now() RETURNING id, user_id, dietary_restrictions, allergies, favorite_categories, notes, created_at, updated_at`,
+		id, postgres.DemoHotelID, asString(v["user_id"]), asStringSlice(v["dietary_restrictions"]), asStringSlice(v["allergies"]), asStringSlice(v["favorite_categories"]), notes)
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -1133,6 +1150,154 @@ func (h *CompatHandler) selectStaffShifts(c *fiber.Ctx, filters []compatFilter) 
 	return response.OK(c, items)
 }
 
+func (h *CompatHandler) selectHousekeepingAssignments(c *fiber.Ctx, filters []compatFilter) error {
+	q := `SELECT ha.id, ha.hotel_id, ha.room_id, ha.assigned_to, ha.task_type, ha.priority, ha.status,
+	             ha.notes, ha.started_at, ha.completed_at, ha.inspected_by, ha.created_at, ha.updated_at,
+	             r.room_number, r.room_type, r.floor, p.full_name
+	      FROM housekeeping_assignments ha
+	      LEFT JOIN rooms r ON r.id = ha.room_id
+	      LEFT JOIN profiles p ON p.user_id = ha.assigned_to`
+	args := []interface{}{}
+	where := []string{}
+	for _, col := range []string{"room_id", "assigned_to", "status"} {
+		if v, ok := filterValue(filters, col); ok {
+			args = append(args, v)
+			where = append(where, fmt.Sprintf("ha.%s = $%d", col, len(args)))
+		}
+	}
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	q += " ORDER BY ha.created_at DESC"
+	rows, err := h.pool.Query(c.Context(), q, args...)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, hotelID, roomID, taskType, priority, status string
+		var assignedTo, notes, inspectedBy, roomNumber, roomType, assignedName *string
+		var floor *int
+		var startedAt, completedAt, createdAt, updatedAt interface{}
+		if err := rows.Scan(&id, &hotelID, &roomID, &assignedTo, &taskType, &priority, &status, &notes, &startedAt, &completedAt, &inspectedBy, &createdAt, &updatedAt, &roomNumber, &roomType, &floor, &assignedName); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		room := interface{}(nil)
+		if roomNumber != nil {
+			room = map[string]interface{}{"room_number": *roomNumber, "room_type": roomType, "floor": floor}
+		}
+		profile := interface{}(nil)
+		if assignedName != nil {
+			profile = map[string]interface{}{"full_name": *assignedName}
+		}
+		items = append(items, map[string]interface{}{"id": id, "hotel_id": hotelID, "room_id": roomID, "assigned_to": assignedTo, "task_type": taskType, "priority": priority, "status": status, "notes": notes, "started_at": startedAt, "completed_at": completedAt, "inspected_by": inspectedBy, "created_at": createdAt, "updated_at": updatedAt, "rooms": room, "profiles": profile})
+	}
+	return response.OK(c, items)
+}
+
+func (h *CompatHandler) selectWorkOrders(c *fiber.Ctx, filters []compatFilter) error {
+	q := `SELECT wo.id, wo.hotel_id, wo.room_id, wo.reported_by, wo.assigned_to, wo.category, wo.priority,
+	             wo.status, wo.title, wo.description, wo.resolution_notes, wo.estimated_minutes,
+	             wo.actual_minutes, wo.created_at, wo.updated_at, wo.resolved_at,
+	             r.room_number, rp.full_name, ap.full_name
+	      FROM work_orders wo
+	      LEFT JOIN rooms r ON r.id = wo.room_id
+	      LEFT JOIN profiles rp ON rp.user_id = wo.reported_by
+	      LEFT JOIN profiles ap ON ap.user_id = wo.assigned_to`
+	args := []interface{}{}
+	where := []string{}
+	for _, col := range []string{"room_id", "assigned_to", "status", "priority"} {
+		if v, ok := filterValue(filters, col); ok {
+			args = append(args, v)
+			where = append(where, fmt.Sprintf("wo.%s = $%d", col, len(args)))
+		}
+	}
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	q += " ORDER BY CASE wo.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, wo.created_at DESC"
+	rows, err := h.pool.Query(c.Context(), q, args...)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, hotelID, reportedBy, priority, status, title string
+		var roomID, assignedTo, category, description, resolutionNotes, roomNumber, reporterName, assigneeName *string
+		var estimatedMinutes, actualMinutes *int
+		var createdAt, updatedAt, resolvedAt interface{}
+		if err := rows.Scan(&id, &hotelID, &roomID, &reportedBy, &assignedTo, &category, &priority, &status, &title, &description, &resolutionNotes, &estimatedMinutes, &actualMinutes, &createdAt, &updatedAt, &resolvedAt, &roomNumber, &reporterName, &assigneeName); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		room := interface{}(nil)
+		if roomNumber != nil {
+			room = map[string]interface{}{"room_number": *roomNumber}
+		}
+		items = append(items, map[string]interface{}{"id": id, "hotel_id": hotelID, "room_id": roomID, "reported_by": reportedBy, "assigned_to": assignedTo, "category": category, "priority": priority, "status": status, "title": title, "description": description, "resolution_notes": resolutionNotes, "estimated_minutes": estimatedMinutes, "actual_minutes": actualMinutes, "created_at": createdAt, "updated_at": updatedAt, "resolved_at": resolvedAt, "rooms": room, "reporter": reporterName, "assignee": assigneeName})
+	}
+	return response.OK(c, items)
+}
+
+func (h *CompatHandler) selectFolios(c *fiber.Ctx, filters []compatFilter) error {
+	q := `SELECT id, hotel_id, booking_id, guest_id, status, currency, created_at, closed_at FROM folios`
+	args := []interface{}{}
+	where := []string{}
+	for _, col := range []string{"booking_id", "guest_id", "status"} {
+		if v, ok := filterValue(filters, col); ok {
+			args = append(args, v)
+			where = append(where, fmt.Sprintf("%s = $%d", col, len(args)))
+		}
+	}
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	q += " ORDER BY created_at DESC"
+	rows, err := h.pool.Query(c.Context(), q, args...)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, hotelID, bookingID, guestID, status, currency string
+		var createdAt, closedAt interface{}
+		if err := rows.Scan(&id, &hotelID, &bookingID, &guestID, &status, &currency, &createdAt, &closedAt); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		items = append(items, map[string]interface{}{"id": id, "hotel_id": hotelID, "booking_id": bookingID, "guest_id": guestID, "status": status, "currency": currency, "created_at": createdAt, "closed_at": closedAt})
+	}
+	return response.OK(c, items)
+}
+
+func (h *CompatHandler) selectFolioCharges(c *fiber.Ctx, filters []compatFilter) error {
+	q := `SELECT id, folio_id, hotel_id, description, charge_type, amount, tax_amount, reference_id, posted_at, posted_by FROM folio_charges`
+	args := []interface{}{}
+	if v, ok := filterValue(filters, "folio_id"); ok {
+		q += " WHERE folio_id = $1"
+		args = append(args, v)
+	}
+	q += " ORDER BY posted_at DESC"
+	rows, err := h.pool.Query(c.Context(), q, args...)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, folioID, hotelID, description string
+		var chargeType, referenceID, postedBy *string
+		var amount, taxAmount float64
+		var postedAt interface{}
+		if err := rows.Scan(&id, &folioID, &hotelID, &description, &chargeType, &amount, &taxAmount, &referenceID, &postedAt, &postedBy); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		items = append(items, map[string]interface{}{"id": id, "folio_id": folioID, "hotel_id": hotelID, "description": description, "charge_type": chargeType, "amount": amount, "tax_amount": taxAmount, "reference_id": referenceID, "posted_at": postedAt, "posted_by": postedBy})
+	}
+	return response.OK(c, items)
+}
+
 func (h *CompatHandler) selectAuditLogs(c *fiber.Ctx, filters []compatFilter) error {
 	rows, err := h.pool.Query(c.Context(), `SELECT id, user_id, action, table_name, record_id, old_data, new_data, created_at FROM audit_logs ORDER BY created_at DESC`)
 	if err != nil {
@@ -1156,8 +1321,8 @@ func (h *CompatHandler) selectAuditLogs(c *fiber.Ctx, filters []compatFilter) er
 func (h *CompatHandler) insertOrder(c *fiber.Ctx, v map[string]interface{}, single string) error {
 	id := uuid.New().String()
 	number := asStringDefault(v["order_number"], fmt.Sprintf("ORD-%s", id[:8]))
-	rows, err := h.pool.Query(c.Context(), `INSERT INTO orders (id, order_number, guest_stay_id, room_id, guest_id, status, special_instructions, total_amount, assigned_waiter_id, created_by, kitchen_notes, pickup_time, delivery_time, rating, feedback, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now(),now()) RETURNING id, order_number, guest_stay_id, room_id, guest_id, status, special_instructions, total_amount, assigned_waiter_id, created_by, kitchen_notes, pickup_time, delivery_time, rating, feedback, created_at, updated_at`,
-		id, number, nullableString(v["guest_stay_id"]), nullableString(v["room_id"]), nullableString(v["guest_id"]), asStringDefault(v["status"], "pending"), nullableString(v["special_instructions"]), asFloatDefault(v["total_amount"], 0), nullableString(v["assigned_waiter_id"]), nullableString(v["created_by"]), nullableString(v["kitchen_notes"]), v["pickup_time"], v["delivery_time"], nullableInt(v["rating"]), nullableString(v["feedback"]))
+	rows, err := h.pool.Query(c.Context(), `INSERT INTO orders (id, hotel_id, order_number, guest_stay_id, room_id, guest_id, status, special_instructions, total_amount, assigned_waiter_id, created_by, kitchen_notes, pickup_time, delivery_time, rating, feedback, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),now()) RETURNING id, order_number, guest_stay_id, room_id, guest_id, status, special_instructions, total_amount, assigned_waiter_id, created_by, kitchen_notes, pickup_time, delivery_time, rating, feedback, created_at, updated_at`,
+		id, postgres.DemoHotelID, number, nullableString(v["guest_stay_id"]), nullableString(v["room_id"]), nullableString(v["guest_id"]), asStringDefault(v["status"], "pending"), nullableString(v["special_instructions"]), asFloatDefault(v["total_amount"], 0), nullableString(v["assigned_waiter_id"]), nullableString(v["created_by"]), nullableString(v["kitchen_notes"]), v["pickup_time"], v["delivery_time"], nullableInt(v["rating"]), nullableString(v["feedback"]))
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -1176,7 +1341,7 @@ func (h *CompatHandler) insertOrderItems(c *fiber.Ctx, values []map[string]inter
 	items := make([]map[string]interface{}, 0, len(values))
 	for _, v := range values {
 		id := uuid.New().String()
-		_, err := h.pool.Exec(c.Context(), `INSERT INTO order_items (id, order_id, menu_item_id, quantity, unit_price, notes, created_at) VALUES ($1,$2,$3,$4,$5,$6,now())`, id, asString(v["order_id"]), asString(v["menu_item_id"]), asIntDefault(v["quantity"], 1), asFloatDefault(v["unit_price"], 0), nullableString(v["notes"]))
+		_, err := h.pool.Exec(c.Context(), `INSERT INTO order_items (id, hotel_id, order_id, menu_item_id, quantity, unit_price, notes, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,now())`, id, postgres.DemoHotelID, asString(v["order_id"]), asString(v["menu_item_id"]), asIntDefault(v["quantity"], 1), asFloatDefault(v["unit_price"], 0), nullableString(v["notes"]))
 		if err != nil {
 			return response.Error(c, fiber.StatusBadRequest, err.Error())
 		}
@@ -1188,7 +1353,7 @@ func (h *CompatHandler) insertOrderItems(c *fiber.Ctx, values []map[string]inter
 func (h *CompatHandler) insertPayment(c *fiber.Ctx, v map[string]interface{}) error {
 	id := uuid.New().String()
 	number := asStringDefault(v["payment_number"], fmt.Sprintf("PAY-%s", id[:8]))
-	_, err := h.pool.Exec(c.Context(), `INSERT INTO payments (id, payment_number, guest_stay_id, order_id, amount, payment_method, status, processed_by, notes, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now())`, id, number, nullableString(v["guest_stay_id"]), nullableString(v["order_id"]), asFloatDefault(v["amount"], 0), asStringDefault(v["payment_method"], "cash"), asStringDefault(v["status"], "pending"), nullableString(v["processed_by"]), nullableString(v["notes"]))
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO payments (id, hotel_id, payment_number, guest_stay_id, order_id, amount, payment_method, status, processed_by, notes, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())`, id, postgres.DemoHotelID, number, nullableString(v["guest_stay_id"]), nullableString(v["order_id"]), asFloatDefault(v["amount"], 0), asStringDefault(v["payment_method"], "cash"), asStringDefault(v["status"], "pending"), nullableString(v["processed_by"]), nullableString(v["notes"]))
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -1197,7 +1362,7 @@ func (h *CompatHandler) insertPayment(c *fiber.Ctx, v map[string]interface{}) er
 
 func (h *CompatHandler) insertPaymentSetting(c *fiber.Ctx, v map[string]interface{}) error {
 	id := uuid.New().String()
-	_, err := h.pool.Exec(c.Context(), `INSERT INTO payment_settings (id, gateway_name, webhook_url, is_active, created_by, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,now(),now()) ON CONFLICT (gateway_name) DO UPDATE SET webhook_url = EXCLUDED.webhook_url, is_active = EXCLUDED.is_active, updated_at = now()`, id, asString(v["gateway_name"]), nullableString(v["webhook_url"]), asBoolDefault(v["is_active"], true), nullableString(v["created_by"]))
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO payment_settings (id, hotel_id, gateway_name, webhook_url, is_active, created_by, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,now(),now()) ON CONFLICT (gateway_name) DO UPDATE SET webhook_url = EXCLUDED.webhook_url, is_active = EXCLUDED.is_active, updated_at = now()`, id, postgres.DemoHotelID, asString(v["gateway_name"]), nullableString(v["webhook_url"]), asBoolDefault(v["is_active"], true), nullableString(v["created_by"]))
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -1210,7 +1375,27 @@ func (h *CompatHandler) insertStaffShift(c *fiber.Ctx, v map[string]interface{})
 	if clockIn == nil {
 		clockIn = "now()"
 	}
-	_, err := h.pool.Exec(c.Context(), `INSERT INTO staff_shifts (id, user_id, clock_in, clock_out, notes, created_at) VALUES ($1,$2,$3,$4,$5,now())`, id, asString(v["user_id"]), clockIn, v["clock_out"], nullableString(v["notes"]))
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO staff_shifts (id, hotel_id, user_id, clock_in, clock_out, notes, created_at) VALUES ($1,$2,$3,$4,$5,$6,now())`, id, postgres.DemoHotelID, asString(v["user_id"]), clockIn, v["clock_out"], nullableString(v["notes"]))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	return response.Created(c, []map[string]interface{}{{"id": id}})
+}
+
+func (h *CompatHandler) insertHousekeepingAssignment(c *fiber.Ctx, v map[string]interface{}) error {
+	id := uuid.New().String()
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO housekeeping_assignments (id, hotel_id, room_id, assigned_to, task_type, priority, status, notes, started_at, completed_at, inspected_by, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now(),now())`,
+		id, postgres.DemoHotelID, asString(v["room_id"]), nullableString(v["assigned_to"]), asStringDefault(v["task_type"], "guest_request"), asStringDefault(v["priority"], "normal"), asStringDefault(v["status"], "pending"), nullableString(v["notes"]), v["started_at"], v["completed_at"], nullableString(v["inspected_by"]))
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	return response.Created(c, []map[string]interface{}{{"id": id}})
+}
+
+func (h *CompatHandler) insertWorkOrder(c *fiber.Ctx, v map[string]interface{}) error {
+	id := uuid.New().String()
+	_, err := h.pool.Exec(c.Context(), `INSERT INTO work_orders (id, hotel_id, room_id, reported_by, assigned_to, category, priority, status, title, description, resolution_notes, estimated_minutes, actual_minutes, created_at, updated_at, resolved_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now(),now(),$14)`,
+		id, postgres.DemoHotelID, nullableString(v["room_id"]), asString(v["reported_by"]), nullableString(v["assigned_to"]), nullableString(v["category"]), asStringDefault(v["priority"], "normal"), asStringDefault(v["status"], "open"), asString(v["title"]), nullableString(v["description"]), nullableString(v["resolution_notes"]), nullableInt(v["estimated_minutes"]), nullableInt(v["actual_minutes"]), v["resolved_at"])
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -1231,6 +1416,14 @@ func (h *CompatHandler) updatePaymentSetting(c *fiber.Ctx, id string, v map[stri
 
 func (h *CompatHandler) updateStaffShift(c *fiber.Ctx, id string, v map[string]interface{}) error {
 	return h.updateAllowedWithoutTimestamp(c, "staff_shifts", id, map[string]bool{"user_id": true, "clock_in": true, "clock_out": true, "notes": true}, v)
+}
+
+func (h *CompatHandler) updateHousekeepingAssignment(c *fiber.Ctx, id string, v map[string]interface{}) error {
+	return h.updateAllowed(c, "housekeeping_assignments", id, map[string]bool{"room_id": true, "assigned_to": true, "task_type": true, "priority": true, "status": true, "notes": true, "started_at": true, "completed_at": true, "inspected_by": true}, v)
+}
+
+func (h *CompatHandler) updateWorkOrder(c *fiber.Ctx, id string, v map[string]interface{}) error {
+	return h.updateAllowed(c, "work_orders", id, map[string]bool{"room_id": true, "reported_by": true, "assigned_to": true, "category": true, "priority": true, "status": true, "title": true, "description": true, "resolution_notes": true, "estimated_minutes": true, "actual_minutes": true, "resolved_at": true}, v)
 }
 
 func (h *CompatHandler) deleteByIDOrColumn(c *fiber.Ctx, table, id string, filters []compatFilter, column string) error {

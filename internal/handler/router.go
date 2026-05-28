@@ -9,9 +9,11 @@ import (
 type Handlers struct {
 	Health    *HealthHandler
 	Auth      *AuthHandler
+	Hotels    *HotelHandler
 	Payments  *PaymentHandler
 	Dashboard *DashboardHandler
 	Rooms     *RoomHandler
+	Ops       *OperationsHandler
 	Compat    *CompatHandler
 }
 
@@ -25,6 +27,9 @@ func Register(app *fiber.App, h Handlers) {
 				"GET /health",
 				"POST /api/auth/sign-in",
 				"POST /api/auth/sign-up",
+				"GET /api/hotel/branding",
+				"PUT /api/hotel/branding",
+				"POST /api/onboarding/hotel",
 				"GET /api/payment-config",
 				"GET /api/exchange-rate",
 				"POST /api/bookings/checkout",
@@ -32,6 +37,11 @@ func Register(app *fiber.App, h Handlers) {
 				"POST /api/payments/complete",
 				"GET /api/dashboard/stats",
 				"GET /api/rooms",
+				"POST /api/housekeeping/guest-requests",
+				"GET /api/plan/limits",
+				"GET /api/reports/occupancy",
+				"GET /api/settings/payment",
+				"PUT /api/settings/payment",
 			},
 		})
 	})
@@ -42,6 +52,9 @@ func Register(app *fiber.App, h Handlers) {
 	if h.Auth != nil {
 		h.Auth.Register(api)
 	}
+	if h.Hotels != nil {
+		h.Hotels.Register(api)
+	}
 	if h.Payments != nil {
 		h.Payments.Register(api)
 	}
@@ -50,6 +63,9 @@ func Register(app *fiber.App, h Handlers) {
 	}
 	if h.Rooms != nil {
 		h.Rooms.Register(api)
+	}
+	if h.Ops != nil {
+		h.Ops.Register(api)
 	}
 	if h.Compat != nil {
 		h.Compat.Register(api)

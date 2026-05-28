@@ -31,9 +31,11 @@ var (
 // AuthClaims are embedded in every JWT.
 type AuthClaims struct {
 	jwt.RegisteredClaims
-	UserID string   `json:"sub"`
-	Email  string   `json:"email"`
-	Roles  []string `json:"roles"`
+	UserID        string   `json:"sub"`
+	HotelID       string   `json:"hotel_id,omitempty"`
+	Email         string   `json:"email"`
+	Roles         []string `json:"roles"`
+	PlatformAdmin bool     `json:"platform_admin"`
 }
 
 // Session is returned to the client after successful authentication.
@@ -47,9 +49,11 @@ type Session struct {
 
 // SessionUser is the public-safe representation of the authenticated user.
 type SessionUser struct {
-	ID           string   `json:"id"`
-	Email        string   `json:"email"`
-	UserMetadata struct{} `json:"user_metadata"`
+	ID            string   `json:"id"`
+	HotelID       string   `json:"hotel_id,omitempty"`
+	Email         string   `json:"email"`
+	PlatformAdmin bool     `json:"platform_admin"`
+	UserMetadata  struct{} `json:"user_metadata"`
 }
 
 // AuthService handles sign-up, sign-in, token refresh and profile updates.
@@ -213,13 +217,18 @@ func (s *authService) buildSession(ctx context.Context, user *domain.User, roles
 	}
 
 	accessExp := time.Now().Add(s.cfg.Auth.AccessTokenTTL)
-	accessToken, err := s.signToken(user.ID.String(), user.Email, roleStrs, accessExp, s.cfg.Auth.AccessTokenSecret)
+	hotelID := ""
+	if user.HotelID != nil {
+		hotelID = user.HotelID.String()
+	}
+
+	accessToken, err := s.signToken(user.ID.String(), hotelID, user.Email, roleStrs, user.PlatformAdmin, accessExp, s.cfg.Auth.AccessTokenSecret)
 	if err != nil {
 		return nil, fmt.Errorf("buildSession access: %w", err)
 	}
 
 	refreshExp := time.Now().Add(s.cfg.Auth.RefreshTokenTTL)
-	refreshToken, err := s.signToken(user.ID.String(), user.Email, roleStrs, refreshExp, s.cfg.Auth.RefreshTokenSecret)
+	refreshToken, err := s.signToken(user.ID.String(), hotelID, user.Email, roleStrs, user.PlatformAdmin, refreshExp, s.cfg.Auth.RefreshTokenSecret)
 	if err != nil {
 		return nil, fmt.Errorf("buildSession refresh: %w", err)
 	}
@@ -230,13 +239,15 @@ func (s *authService) buildSession(ctx context.Context, user *domain.User, roles
 		TokenType:    "bearer",
 		ExpiresIn:    int64(s.cfg.Auth.AccessTokenTTL.Seconds()),
 		User: &SessionUser{
-			ID:    user.ID.String(),
-			Email: user.Email,
+			ID:            user.ID.String(),
+			HotelID:       hotelID,
+			Email:         user.Email,
+			PlatformAdmin: user.PlatformAdmin,
 		},
 	}, nil
 }
 
-func (s *authService) signToken(userID, email string, roles []string, exp time.Time, secret string) (string, error) {
+func (s *authService) signToken(userID, hotelID, email string, roles []string, platformAdmin bool, exp time.Time, secret string) (string, error) {
 	claims := AuthClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(exp),
@@ -245,9 +256,11 @@ func (s *authService) signToken(userID, email string, roles []string, exp time.T
 			Subject:   userID,
 			ID:        uuid.New().String(),
 		},
-		UserID: userID,
-		Email:  email,
-		Roles:  roles,
+		UserID:        userID,
+		HotelID:       hotelID,
+		Email:         email,
+		Roles:         roles,
+		PlatformAdmin: platformAdmin,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(secret))
@@ -286,10 +299,16 @@ func HasRole(roles []domain.UserRole, required ...domain.UserRole) bool {
 	for _, r := range roles {
 		roleSet[r] = struct{}{}
 	}
+	if _, ok := roleSet[domain.RolePlatformAdmin]; ok {
+		return true
+	}
 	if _, ok := roleSet[domain.RoleSuperAdmin]; ok {
 		return true
 	}
 	if _, ok := roleSet[domain.RoleAdmin]; ok {
+		return true
+	}
+	if _, ok := roleSet[domain.RoleHotelAdmin]; ok {
 		return true
 	}
 	for _, r := range required {

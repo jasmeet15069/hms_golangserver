@@ -58,45 +58,132 @@ const (
 type UserRole string
 
 const (
-	RoleAdmin          UserRole = "admin"
-	RoleSuperAdmin     UserRole = "super_admin"
-	RoleFoodManager    UserRole = "food_manager"
-	RoleKitchenManager UserRole = "kitchen_manager"
-	RoleWaiter         UserRole = "waiter"
-	RoleGuest          UserRole = "guest"
+	RolePlatformAdmin   UserRole = "platform_admin"
+	RoleHotelAdmin      UserRole = "hotel_admin"
+	RolePropertyManager UserRole = "property_manager"
+	RoleReceptionist    UserRole = "receptionist"
+	RoleHousekeeping    UserRole = "housekeeping"
+	RoleMaintenance     UserRole = "maintenance"
+	RoleAdmin           UserRole = "admin"
+	RoleSuperAdmin      UserRole = "super_admin"
+	RoleFoodManager     UserRole = "food_manager"
+	RoleKitchenManager  UserRole = "kitchen_manager"
+	RoleWaiter          UserRole = "waiter"
+	RoleGuest           UserRole = "guest"
 )
+
+type Hotel struct {
+	ID                   uuid.UUID              `db:"id" json:"id"`
+	Name                 string                 `db:"name" json:"name"`
+	Slug                 string                 `db:"slug" json:"slug"`
+	PlanTier             string                 `db:"plan_tier" json:"plan_tier"`
+	IsActive             bool                   `db:"is_active" json:"is_active"`
+	Settings             map[string]interface{} `db:"settings" json:"settings"`
+	LogoURL              *string                `db:"logo_url" json:"logo_url,omitempty"`
+	PrimaryColor         *string                `db:"primary_color" json:"primary_color,omitempty"`
+	Address              *string                `db:"address" json:"address,omitempty"`
+	Country              *string                `db:"country" json:"country,omitempty"`
+	Timezone             *string                `db:"timezone" json:"timezone,omitempty"`
+	Currency             *string                `db:"currency" json:"currency,omitempty"`
+	Phone                *string                `db:"phone" json:"phone,omitempty"`
+	Email                *string                `db:"email" json:"email,omitempty"`
+	Website              *string                `db:"website" json:"website,omitempty"`
+	StripeAccountID      *string                `db:"stripe_account_id" json:"stripe_account_id,omitempty"`
+	StripeEnabled        bool                   `db:"stripe_enabled" json:"stripe_enabled"`
+	RazorpayKeyID        *string                `db:"razorpay_key_id" json:"razorpay_key_id,omitempty"`
+	RazorpayEnabled      bool                   `db:"razorpay_enabled" json:"razorpay_enabled"`
+	ActivePaymentGateway string                 `db:"active_payment_gateway" json:"active_payment_gateway"`
+	CreatedAt            time.Time              `db:"created_at" json:"created_at"`
+	UpdatedAt            time.Time              `db:"updated_at" json:"updated_at"`
+}
+
+type Property struct {
+	ID         uuid.UUID `db:"id" json:"id"`
+	HotelID    uuid.UUID `db:"hotel_id" json:"hotel_id"`
+	Name       string    `db:"name" json:"name"`
+	Address    *string   `db:"address" json:"address,omitempty"`
+	StarRating *int      `db:"star_rating" json:"star_rating,omitempty"`
+	TotalRooms *int      `db:"total_rooms" json:"total_rooms,omitempty"`
+	CreatedAt  time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
+}
+
+type RoomType struct {
+	ID                uuid.UUID              `db:"id" json:"id"`
+	HotelID           uuid.UUID              `db:"hotel_id" json:"hotel_id"`
+	PropertyID        *uuid.UUID             `db:"property_id" json:"property_id,omitempty"`
+	Name              string                 `db:"name" json:"name"`
+	Description       *string                `db:"description" json:"description,omitempty"`
+	BasePricePerNight float64                `db:"base_price_per_night" json:"base_price_per_night"`
+	MaxCapacity       int                    `db:"max_capacity" json:"max_capacity"`
+	Amenities         []string               `db:"-" json:"amenities"`
+	IsActive          bool                   `db:"is_active" json:"is_active"`
+	CreatedAt         time.Time              `db:"created_at" json:"created_at"`
+	UpdatedAt         time.Time              `db:"updated_at" json:"updated_at"`
+	RawAmenities      map[string]interface{} `db:"amenities" json:"-"`
+}
+
+type TaxConfig struct {
+	ID          uuid.UUID `db:"id" json:"id"`
+	HotelID     uuid.UUID `db:"hotel_id" json:"hotel_id"`
+	Name        string    `db:"name" json:"name"`
+	Rate        float64   `db:"rate" json:"rate"`
+	AppliesTo   string    `db:"applies_to" json:"applies_to"`
+	IsInclusive bool      `db:"is_inclusive" json:"is_inclusive"`
+	IsActive    bool      `db:"is_active" json:"is_active"`
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
+}
+
+type HotelBranding struct {
+	HotelID        uuid.UUID `db:"hotel_id" json:"hotel_id"`
+	LogoURL        *string   `db:"logo_url" json:"logo_url,omitempty"`
+	PrimaryColor   string    `db:"primary_color" json:"primary_color"`
+	WelcomeMessage *string   `db:"welcome_message" json:"welcome_message,omitempty"`
+	FooterText     *string   `db:"footer_text" json:"footer_text,omitempty"`
+	HotelName      string    `db:"-" json:"hotel_name,omitempty"`
+	Slug           string    `db:"-" json:"slug,omitempty"`
+	Country        *string   `db:"-" json:"country,omitempty"`
+	Currency       *string   `db:"-" json:"currency,omitempty"`
+	UpdatedAt      time.Time `db:"updated_at" json:"updated_at"`
+}
 
 // User is the authentication principal.
 type User struct {
-	ID           uuid.UUID `db:"id" json:"id"`
-	Email        string    `db:"email" json:"email"`
-	PasswordHash string    `db:"password_hash" json:"-"`
-	CreatedAt    time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt    time.Time `db:"updated_at" json:"updated_at"`
+	ID            uuid.UUID  `db:"id" json:"id"`
+	HotelID       *uuid.UUID `db:"hotel_id" json:"hotel_id,omitempty"`
+	Email         string     `db:"email" json:"email"`
+	PasswordHash  string     `db:"password_hash" json:"-"`
+	PlatformAdmin bool       `db:"platform_admin" json:"platform_admin"`
+	CreatedAt     time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt     time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 // Profile holds display-level information about a user.
 type Profile struct {
-	ID        uuid.UUID `db:"id" json:"id"`
-	UserID    uuid.UUID `db:"user_id" json:"user_id"`
-	FullName  string    `db:"full_name" json:"full_name"`
-	Phone     *string   `db:"phone" json:"phone,omitempty"`
-	AvatarURL *string   `db:"avatar_url" json:"avatar_url,omitempty"`
-	CreatedAt time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
+	ID        uuid.UUID  `db:"id" json:"id"`
+	HotelID   *uuid.UUID `db:"hotel_id" json:"hotel_id,omitempty"`
+	UserID    uuid.UUID  `db:"user_id" json:"user_id"`
+	FullName  string     `db:"full_name" json:"full_name"`
+	Phone     *string    `db:"phone" json:"phone,omitempty"`
+	AvatarURL *string    `db:"avatar_url" json:"avatar_url,omitempty"`
+	CreatedAt time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 // UserRoleEntry assigns a role to a user.
 type UserRoleEntry struct {
-	ID        uuid.UUID `db:"id" json:"id"`
-	UserID    uuid.UUID `db:"user_id" json:"user_id"`
-	Role      UserRole  `db:"role" json:"role"`
-	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	ID        uuid.UUID  `db:"id" json:"id"`
+	HotelID   *uuid.UUID `db:"hotel_id" json:"hotel_id,omitempty"`
+	UserID    uuid.UUID  `db:"user_id" json:"user_id"`
+	Role      UserRole   `db:"role" json:"role"`
+	CreatedAt time.Time  `db:"created_at" json:"created_at"`
 }
 
 // Room represents a physical hotel room.
 type Room struct {
 	ID            uuid.UUID  `db:"id" json:"id"`
+	HotelID       uuid.UUID  `db:"hotel_id" json:"hotel_id"`
 	RoomNumber    string     `db:"room_number" json:"room_number"`
 	RoomType      string     `db:"room_type" json:"room_type"`
 	Floor         int        `db:"floor" json:"floor"`
@@ -111,6 +198,7 @@ type Room struct {
 // GuestStay is a single booking / check-in record.
 type GuestStay struct {
 	ID             uuid.UUID    `db:"id" json:"id"`
+	HotelID        uuid.UUID    `db:"hotel_id" json:"hotel_id"`
 	GuestID        *uuid.UUID   `db:"guest_id" json:"guest_id,omitempty"`
 	RoomID         uuid.UUID    `db:"room_id" json:"room_id"`
 	GuestName      string       `db:"guest_name" json:"guest_name"`
@@ -280,6 +368,7 @@ type GuestStaySummary struct {
 // Payment is a financial transaction record.
 type Payment struct {
 	ID            uuid.UUID     `db:"id" json:"id"`
+	HotelID       uuid.UUID     `db:"hotel_id" json:"hotel_id"`
 	PaymentNumber string        `db:"payment_number" json:"payment_number"`
 	GuestStayID   *uuid.UUID    `db:"guest_stay_id" json:"guest_stay_id,omitempty"`
 	OrderID       *uuid.UUID    `db:"order_id" json:"order_id,omitempty"`
@@ -339,12 +428,33 @@ type GuestPreferences struct {
 // PaymentSetting is a gateway configuration record.
 type PaymentSetting struct {
 	ID          uuid.UUID  `db:"id" json:"id"`
+	HotelID     uuid.UUID  `db:"hotel_id" json:"hotel_id"`
 	GatewayName string     `db:"gateway_name" json:"gateway_name"`
 	WebhookURL  *string    `db:"webhook_url" json:"webhook_url,omitempty"`
 	IsActive    bool       `db:"is_active" json:"is_active"`
 	CreatedBy   *uuid.UUID `db:"created_by" json:"created_by,omitempty"`
 	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
 	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
+}
+
+// PaymentGatewayConfig stores per-hotel gateway settings. Secret fields are
+// encrypted at rest and never serialized to clients.
+type PaymentGatewayConfig struct {
+	HotelID                      uuid.UUID `json:"hotel_id"`
+	ActiveGateway                string    `json:"active_gateway"`
+	DefaultCurrency              string    `json:"default_currency"`
+	GatewayMode                  string    `json:"gateway_mode"`
+	StripeEnabled                bool      `json:"stripe_enabled"`
+	StripeAccountID              *string   `json:"stripe_account_id,omitempty"`
+	StripePublishableKey         *string   `json:"stripe_publishable_key,omitempty"`
+	StripeSecretKeyEncrypted     *string   `json:"-"`
+	StripeWebhookSecretEncrypted *string   `json:"-"`
+	RazorpayEnabled              bool      `json:"razorpay_enabled"`
+	RazorpayKeyID                *string   `json:"razorpay_key_id,omitempty"`
+	RazorpayKeySecretEncrypted   *string   `json:"-"`
+	CashEnabled                  bool      `json:"cash_enabled"`
+	CardEnabled                  bool      `json:"card_enabled"`
+	BankTransferEnabled          bool      `json:"bank_transfer_enabled"`
 }
 
 // DashboardStats is the aggregated read model for the dashboard.

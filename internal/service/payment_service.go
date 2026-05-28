@@ -2,6 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -87,8 +91,8 @@ func NewPaymentService(
 
 // BookingCheckout creates a guest_stay, payment record, and Stripe session.
 func (s *paymentService) BookingCheckout(ctx context.Context, req BookingCheckoutRequest) (*CheckoutResult, error) {
-	if s.cfg.Stripe.SecretKey == "" {
-		return nil, fmt.Errorf("Stripe secret key is not configured")
+	if _, err := s.stripeSecretKey(ctx); err != nil {
+		return nil, err
 	}
 	if err := s.ensureStripeChargesEnabled(ctx); err != nil {
 		return nil, err
@@ -205,8 +209,8 @@ func (s *paymentService) BookingCheckout(ctx context.Context, req BookingCheckou
 
 // PaymentCheckout creates a Stripe session for an existing payment record.
 func (s *paymentService) PaymentCheckout(ctx context.Context, paymentID uuid.UUID, currency, country, originURL string) (*CheckoutResult, error) {
-	if s.cfg.Stripe.SecretKey == "" {
-		return nil, fmt.Errorf("Stripe secret key is not configured")
+	if _, err := s.stripeSecretKey(ctx); err != nil {
+		return nil, err
 	}
 	if err := s.ensureStripeChargesEnabled(ctx); err != nil {
 		return nil, err
@@ -298,13 +302,14 @@ func (s *paymentService) PaymentCheckout(ctx context.Context, paymentID uuid.UUI
 
 // CompletePayment verifies a Stripe session and marks the payment completed.
 func (s *paymentService) CompletePayment(ctx context.Context, paymentID uuid.UUID, sessionID string) error {
-	if s.cfg.Stripe.SecretKey == "" {
-		return fmt.Errorf("Stripe secret key is not configured")
+	secretKey, err := s.stripeSecretKey(ctx)
+	if err != nil {
+		return err
 	}
 
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
 		fmt.Sprintf("https://api.stripe.com/v1/checkout/sessions/%s", sessionID), nil)
-	req.Header.Set("Authorization", "Bearer "+s.cfg.Stripe.SecretKey)
+	req.Header.Set("Authorization", "Bearer "+secretKey)
 	req.Header.Set("User-Agent", "HotelHarmony/2.0")
 
 	resp, err := s.httpClient.Do(req)
@@ -332,6 +337,26 @@ func (s *paymentService) CompletePayment(ctx context.Context, paymentID uuid.UUI
 func (s *paymentService) GetConfig(ctx context.Context) map[string]interface{} {
 	secret := s.cfg.Stripe.SecretKey
 	pub := s.cfg.Stripe.PublishableKey
+	activeGateway := "stripe"
+	razorpayConfigured := false
+	defaultCurrency := "USD"
+	gatewayMode := ""
+	if gatewayCfg, err := s.paymentRepo.FindGatewayConfig(ctx); err == nil {
+		activeGateway = gatewayCfg.ActiveGateway
+		defaultCurrency = gatewayCfg.DefaultCurrency
+		gatewayMode = gatewayCfg.GatewayMode
+		if gatewayCfg.StripePublishableKey != nil && strings.TrimSpace(*gatewayCfg.StripePublishableKey) != "" {
+			pub = strings.TrimSpace(*gatewayCfg.StripePublishableKey)
+		}
+		if storedSecret, err := s.decryptSetting(gatewayCfg.StripeSecretKeyEncrypted); err == nil && storedSecret != "" {
+			secret = storedSecret
+		}
+		razorpayConfigured = gatewayCfg.RazorpayEnabled &&
+			gatewayCfg.RazorpayKeyID != nil &&
+			strings.TrimSpace(*gatewayCfg.RazorpayKeyID) != "" &&
+			gatewayCfg.RazorpayKeySecretEncrypted != nil &&
+			strings.TrimSpace(*gatewayCfg.RazorpayKeySecretEncrypted) != ""
+	}
 	configured := strings.HasPrefix(secret, "sk_")
 	mode := ""
 	if strings.HasPrefix(secret, "sk_live_") {
@@ -346,10 +371,14 @@ func (s *paymentService) GetConfig(ctx context.Context) map[string]interface{} {
 		pubMode = "test"
 	}
 	return map[string]interface{}{
-		"stripe_configured": configured,
-		"mode":              mode,
-		"publishable_mode":  pubMode,
-		"mode_matches":      mode != "" && pubMode != "" && mode == pubMode,
+		"stripe_configured":   configured,
+		"active_gateway":      activeGateway,
+		"default_currency":    defaultCurrency,
+		"gateway_mode":        gatewayMode,
+		"mode":                mode,
+		"publishable_mode":    pubMode,
+		"mode_matches":        mode != "" && pubMode != "" && mode == pubMode,
+		"razorpay_configured": razorpayConfigured,
 	}
 }
 
@@ -412,6 +441,11 @@ type stripeSession struct {
 }
 
 func (s *paymentService) createStripeSession(ctx context.Context, p stripeSessionParams) (*stripeSession, error) {
+	secretKey, err := s.stripeSecretKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	minorAmount := stripeMinorAmount(p.Amount, p.Currency)
 
 	form := url.Values{}
@@ -439,7 +473,7 @@ func (s *paymentService) createStripeSession(ctx context.Context, p stripeSessio
 	req, _ := http.NewRequestWithContext(reqCtx, http.MethodPost,
 		"https://api.stripe.com/v1/checkout/sessions",
 		strings.NewReader(form.Encode()))
-	req.Header.Set("Authorization", "Bearer "+s.cfg.Stripe.SecretKey)
+	req.Header.Set("Authorization", "Bearer "+secretKey)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Idempotency-Key", p.IdempotencyKey)
 	req.Header.Set("User-Agent", "HotelHarmony/2.0")
@@ -489,6 +523,59 @@ func (s *paymentService) ensureStripeChargesEnabled(ctx context.Context) error {
 		return fmt.Errorf("Stripe live payments are not enabled on this account yet. Complete Stripe account activation / KYC in the Stripe dashboard before accepting card payments")
 	}
 	return nil
+}
+
+func (s *paymentService) stripeSecretKey(ctx context.Context) (string, error) {
+	if gatewayCfg, err := s.paymentRepo.FindGatewayConfig(ctx); err == nil {
+		if gatewayCfg.ActiveGateway != "" && gatewayCfg.ActiveGateway != "stripe" && gatewayCfg.ActiveGateway != "none" {
+			return "", fmt.Errorf("%s is the active payment gateway; Stripe checkout is not enabled", gatewayCfg.ActiveGateway)
+		}
+		if gatewayCfg.ActiveGateway == "stripe" || gatewayCfg.StripeEnabled {
+			if storedSecret, err := s.decryptSetting(gatewayCfg.StripeSecretKeyEncrypted); err == nil && strings.HasPrefix(storedSecret, "sk_") {
+				return storedSecret, nil
+			}
+		}
+	}
+	if strings.HasPrefix(s.cfg.Stripe.SecretKey, "sk_") {
+		return s.cfg.Stripe.SecretKey, nil
+	}
+	return "", fmt.Errorf("Stripe secret key is not configured")
+}
+
+func (s *paymentService) decryptSetting(value *string) (string, error) {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return "", nil
+	}
+	parts := strings.Split(strings.TrimSpace(*value), ":")
+	if len(parts) != 3 || parts[0] != "v1" {
+		return "", fmt.Errorf("unsupported encrypted setting format")
+	}
+	nonce, err := base64.RawStdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", err
+	}
+	ciphertext, err := base64.RawStdEncoding.DecodeString(parts[2])
+	if err != nil {
+		return "", err
+	}
+	keyMaterial := s.cfg.Auth.AccessTokenSecret
+	if keyMaterial == "" {
+		keyMaterial = "hotelops-local-development-secret"
+	}
+	key := sha256.Sum256([]byte(keyMaterial))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	plain, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", err
+	}
+	return string(plain), nil
 }
 
 func stripeMinorAmount(amount float64, currency string) int64 {
