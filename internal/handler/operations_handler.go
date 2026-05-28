@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -263,6 +264,10 @@ type updatePaymentSettingsRequest struct {
 }
 
 func (h *OperationsHandler) UpdatePaymentSettings(c *fiber.Ctx) error {
+	if err := h.requireHotelAdmin(c); err != nil {
+		return err
+	}
+
 	var req updatePaymentSettingsRequest
 	if err := c.BodyParser(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body")
@@ -387,6 +392,42 @@ func (h *OperationsHandler) UpdatePaymentSettings(c *fiber.Ctx) error {
 	})
 
 	return h.PaymentSettings(c)
+}
+
+func (h *OperationsHandler) requireHotelAdmin(c *fiber.Ctx) error {
+	authHeader := c.Get("Authorization")
+	tokenString := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+	if tokenString == "" || h.secretKey == "" {
+		return response.Error(c, fiber.StatusUnauthorized, "staff authentication is required")
+	}
+
+	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("invalid signing method")
+		}
+		return []byte(h.secretKey), nil
+	})
+	if err != nil || !token.Valid {
+		return response.Error(c, fiber.StatusUnauthorized, "invalid staff token")
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return response.Error(c, fiber.StatusUnauthorized, "invalid staff token")
+	}
+
+	rawRoles, ok := claims["roles"].([]interface{})
+	if !ok {
+		return response.Error(c, fiber.StatusForbidden, "hotel admin role is required")
+	}
+	for _, rawRole := range rawRoles {
+		role, _ := rawRole.(string)
+		switch role {
+		case "platform_admin", "hotel_admin", "super_admin":
+			return nil
+		}
+	}
+	return response.Error(c, fiber.StatusForbidden, "hotel admin role is required")
 }
 
 func (h *OperationsHandler) reportCounts(c *fiber.Ctx, name, sql string, keys []string) error {
