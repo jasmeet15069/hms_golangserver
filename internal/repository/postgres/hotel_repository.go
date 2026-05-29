@@ -98,15 +98,25 @@ func (r *hotelRepository) UpsertBranding(ctx context.Context, branding *domain.H
 	}
 
 	const q = `
-		INSERT INTO hotel_branding (hotel_id, logo_url, primary_color, welcome_message, footer_text, updated_at)
-		VALUES ($1,$2,$3,$4,$5,now())
+		INSERT INTO hotel_branding (hotel_id, logo_url, primary_color, client_primary_color, admin_primary_color, welcome_message, footer_text, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,now())
 		ON CONFLICT (hotel_id) DO UPDATE
 		  SET logo_url = EXCLUDED.logo_url,
 		      primary_color = EXCLUDED.primary_color,
+		      client_primary_color = EXCLUDED.client_primary_color,
+		      admin_primary_color = EXCLUDED.admin_primary_color,
 		      welcome_message = EXCLUDED.welcome_message,
 		      footer_text = EXCLUDED.footer_text,
 		      updated_at = now()`
-	if _, err := tx.Exec(ctx, q, branding.HotelID, branding.LogoURL, branding.PrimaryColor, branding.WelcomeMessage, branding.FooterText); err != nil {
+	clientColor := strings.TrimSpace(branding.ClientPrimaryColor)
+	if clientColor == "" {
+		clientColor = branding.PrimaryColor
+	}
+	adminColor := strings.TrimSpace(branding.AdminPrimaryColor)
+	if adminColor == "" {
+		adminColor = branding.PrimaryColor
+	}
+	if _, err := tx.Exec(ctx, q, branding.HotelID, branding.LogoURL, branding.PrimaryColor, clientColor, adminColor, branding.WelcomeMessage, branding.FooterText); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -117,7 +127,10 @@ func (r *hotelRepository) UpsertBranding(ctx context.Context, branding *domain.H
 
 func (r *hotelRepository) FindBrandingBySlug(ctx context.Context, slug string) (*domain.HotelBranding, error) {
 	const q = `
-		SELECT hb.hotel_id, hb.logo_url, hb.primary_color, hb.welcome_message, hb.footer_text, hb.updated_at,
+		SELECT h.id, COALESCE(hb.logo_url, h.logo_url), COALESCE(hb.primary_color, h.primary_color, '#000000'),
+		       COALESCE(hb.client_primary_color, hb.primary_color, h.primary_color, '#000000'),
+		       COALESCE(hb.admin_primary_color, hb.primary_color, h.primary_color, '#000000'),
+		       hb.welcome_message, hb.footer_text, COALESCE(hb.updated_at, h.updated_at),
 		       h.name, h.slug, h.country, h.currency
 		FROM hotels h
 		LEFT JOIN hotel_branding hb ON hb.hotel_id = h.id
@@ -128,7 +141,10 @@ func (r *hotelRepository) FindBrandingBySlug(ctx context.Context, slug string) (
 
 func (r *hotelRepository) FindBrandingByHotelID(ctx context.Context, hotelID uuid.UUID) (*domain.HotelBranding, error) {
 	const q = `
-		SELECT hb.hotel_id, hb.logo_url, hb.primary_color, hb.welcome_message, hb.footer_text, hb.updated_at,
+		SELECT h.id, COALESCE(hb.logo_url, h.logo_url), COALESCE(hb.primary_color, h.primary_color, '#000000'),
+		       COALESCE(hb.client_primary_color, hb.primary_color, h.primary_color, '#000000'),
+		       COALESCE(hb.admin_primary_color, hb.primary_color, h.primary_color, '#000000'),
+		       hb.welcome_message, hb.footer_text, COALESCE(hb.updated_at, h.updated_at),
 		       h.name, h.slug, h.country, h.currency
 		FROM hotels h
 		LEFT JOIN hotel_branding hb ON hb.hotel_id = h.id
@@ -158,7 +174,7 @@ func scanHotel(row pgx.Row) (*domain.Hotel, error) {
 
 func scanBranding(row pgx.Row) (*domain.HotelBranding, error) {
 	b := &domain.HotelBranding{}
-	err := row.Scan(&b.HotelID, &b.LogoURL, &b.PrimaryColor, &b.WelcomeMessage, &b.FooterText, &b.UpdatedAt)
+	err := row.Scan(&b.HotelID, &b.LogoURL, &b.PrimaryColor, &b.ClientPrimaryColor, &b.AdminPrimaryColor, &b.WelcomeMessage, &b.FooterText, &b.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -171,7 +187,7 @@ func scanBranding(row pgx.Row) (*domain.HotelBranding, error) {
 func scanEnrichedBranding(row pgx.Row) (*domain.HotelBranding, error) {
 	b := &domain.HotelBranding{}
 	err := row.Scan(
-		&b.HotelID, &b.LogoURL, &b.PrimaryColor, &b.WelcomeMessage, &b.FooterText, &b.UpdatedAt,
+		&b.HotelID, &b.LogoURL, &b.PrimaryColor, &b.ClientPrimaryColor, &b.AdminPrimaryColor, &b.WelcomeMessage, &b.FooterText, &b.UpdatedAt,
 		&b.HotelName, &b.Slug, &b.Country, &b.Currency,
 	)
 	if err != nil {
@@ -182,6 +198,12 @@ func scanEnrichedBranding(row pgx.Row) (*domain.HotelBranding, error) {
 	}
 	if b.PrimaryColor == "" {
 		b.PrimaryColor = "#000000"
+	}
+	if b.ClientPrimaryColor == "" {
+		b.ClientPrimaryColor = b.PrimaryColor
+	}
+	if b.AdminPrimaryColor == "" {
+		b.AdminPrimaryColor = b.PrimaryColor
 	}
 	return b, nil
 }

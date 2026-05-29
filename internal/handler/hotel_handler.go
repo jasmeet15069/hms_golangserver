@@ -33,21 +33,23 @@ func (h *HotelHandler) Register(r fiber.Router) {
 }
 
 type createHotelRequest struct {
-	Name           string  `json:"name"`
-	Slug           string  `json:"slug"`
-	PlanTier       string  `json:"plan_tier"`
-	LogoURL        *string `json:"logo_url"`
-	PrimaryColor   *string `json:"primary_color"`
-	Address        *string `json:"address"`
-	Country        *string `json:"country"`
-	Timezone       *string `json:"timezone"`
-	Currency       *string `json:"currency"`
-	Phone          *string `json:"phone"`
-	Email          *string `json:"email"`
-	Website        *string `json:"website"`
-	WelcomeMessage *string `json:"welcome_message"`
-	FooterText     *string `json:"footer_text"`
-	Property       *struct {
+	Name               string  `json:"name"`
+	Slug               string  `json:"slug"`
+	PlanTier           string  `json:"plan_tier"`
+	LogoURL            *string `json:"logo_url"`
+	PrimaryColor       *string `json:"primary_color"`
+	ClientPrimaryColor *string `json:"client_primary_color"`
+	AdminPrimaryColor  *string `json:"admin_primary_color"`
+	Address            *string `json:"address"`
+	Country            *string `json:"country"`
+	Timezone           *string `json:"timezone"`
+	Currency           *string `json:"currency"`
+	Phone              *string `json:"phone"`
+	Email              *string `json:"email"`
+	Website            *string `json:"website"`
+	WelcomeMessage     *string `json:"welcome_message"`
+	FooterText         *string `json:"footer_text"`
+	Property           *struct {
 		Name       string  `json:"name"`
 		Address    *string `json:"address"`
 		StarRating *int    `json:"star_rating"`
@@ -114,13 +116,18 @@ func (h *HotelHandler) CreateHotel(c *fiber.Ctx) error {
 		}
 	}
 
+	primaryColor := deref(defaultStringPtr(req.PrimaryColor, "#000000"))
+	clientColor := deref(defaultStringPtr(req.ClientPrimaryColor, primaryColor))
+	adminColor := deref(defaultStringPtr(req.AdminPrimaryColor, primaryColor))
 	branding, err := h.hotels.UpsertBranding(c.Context(), &domain.HotelBranding{
-		HotelID:        hotel.ID,
-		LogoURL:        req.LogoURL,
-		PrimaryColor:   deref(defaultStringPtr(req.PrimaryColor, "#000000")),
-		WelcomeMessage: req.WelcomeMessage,
-		FooterText:     req.FooterText,
-		HotelName:      req.Name,
+		HotelID:            hotel.ID,
+		LogoURL:            req.LogoURL,
+		PrimaryColor:       primaryColor,
+		ClientPrimaryColor: clientColor,
+		AdminPrimaryColor:  adminColor,
+		WelcomeMessage:     req.WelcomeMessage,
+		FooterText:         req.FooterText,
+		HotelName:          req.Name,
 	})
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
@@ -159,12 +166,14 @@ func (h *HotelHandler) Branding(c *fiber.Ctx) error {
 }
 
 type updateBrandingRequest struct {
-	HotelID        string  `json:"hotel_id"`
-	HotelName      string  `json:"hotel_name"`
-	LogoURL        *string `json:"logo_url"`
-	PrimaryColor   string  `json:"primary_color"`
-	WelcomeMessage *string `json:"welcome_message"`
-	FooterText     *string `json:"footer_text"`
+	HotelID            string  `json:"hotel_id"`
+	HotelName          string  `json:"hotel_name"`
+	LogoURL            *string `json:"logo_url"`
+	PrimaryColor       string  `json:"primary_color"`
+	ClientPrimaryColor string  `json:"client_primary_color"`
+	AdminPrimaryColor  string  `json:"admin_primary_color"`
+	WelcomeMessage     *string `json:"welcome_message"`
+	FooterText         *string `json:"footer_text"`
 }
 
 func (h *HotelHandler) UpdateBranding(c *fiber.Ctx) error {
@@ -188,13 +197,23 @@ func (h *HotelHandler) UpdateBranding(c *fiber.Ctx) error {
 	if color == "" {
 		color = "#000000"
 	}
+	clientColor := strings.TrimSpace(req.ClientPrimaryColor)
+	if clientColor == "" {
+		clientColor = color
+	}
+	adminColor := strings.TrimSpace(req.AdminPrimaryColor)
+	if adminColor == "" {
+		adminColor = color
+	}
 	branding, err := h.hotels.UpsertBranding(c.Context(), &domain.HotelBranding{
-		HotelID:        hotelID,
-		LogoURL:        req.LogoURL,
-		PrimaryColor:   color,
-		WelcomeMessage: req.WelcomeMessage,
-		FooterText:     req.FooterText,
-		HotelName:      strings.TrimSpace(req.HotelName),
+		HotelID:            hotelID,
+		LogoURL:            req.LogoURL,
+		PrimaryColor:       color,
+		ClientPrimaryColor: clientColor,
+		AdminPrimaryColor:  adminColor,
+		WelcomeMessage:     req.WelcomeMessage,
+		FooterText:         req.FooterText,
+		HotelName:          strings.TrimSpace(req.HotelName),
 	})
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())

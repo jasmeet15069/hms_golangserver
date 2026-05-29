@@ -136,16 +136,18 @@ type TaxConfig struct {
 }
 
 type HotelBranding struct {
-	HotelID        uuid.UUID `db:"hotel_id" json:"hotel_id"`
-	LogoURL        *string   `db:"logo_url" json:"logo_url,omitempty"`
-	PrimaryColor   string    `db:"primary_color" json:"primary_color"`
-	WelcomeMessage *string   `db:"welcome_message" json:"welcome_message,omitempty"`
-	FooterText     *string   `db:"footer_text" json:"footer_text,omitempty"`
-	HotelName      string    `db:"-" json:"hotel_name,omitempty"`
-	Slug           string    `db:"-" json:"slug,omitempty"`
-	Country        *string   `db:"-" json:"country,omitempty"`
-	Currency       *string   `db:"-" json:"currency,omitempty"`
-	UpdatedAt      time.Time `db:"updated_at" json:"updated_at"`
+	HotelID            uuid.UUID `db:"hotel_id" json:"hotel_id"`
+	LogoURL            *string   `db:"logo_url" json:"logo_url,omitempty"`
+	PrimaryColor       string    `db:"primary_color" json:"primary_color"`
+	ClientPrimaryColor string    `db:"client_primary_color" json:"client_primary_color,omitempty"`
+	AdminPrimaryColor  string    `db:"admin_primary_color" json:"admin_primary_color,omitempty"`
+	WelcomeMessage     *string   `db:"welcome_message" json:"welcome_message,omitempty"`
+	FooterText         *string   `db:"footer_text" json:"footer_text,omitempty"`
+	HotelName          string    `db:"-" json:"hotel_name,omitempty"`
+	Slug               string    `db:"-" json:"slug,omitempty"`
+	Country            *string   `db:"-" json:"country,omitempty"`
+	Currency           *string   `db:"-" json:"currency,omitempty"`
+	UpdatedAt          time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // User is the authentication principal.
