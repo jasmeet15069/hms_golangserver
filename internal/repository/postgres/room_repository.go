@@ -85,7 +85,7 @@ func (r *roomRepository) FindAvailableRoom(ctx context.Context, roomType *string
 		  FROM rooms WHERE hotel_id = $1 AND status = 'available'`
 	args := []interface{}{DemoHotelID}
 	if roomType != nil {
-		q += " AND room_type = $2"
+		q += " AND LOWER(room_type) = LOWER($2)"
 		args = append(args, *roomType)
 	}
 	q += " ORDER BY price_per_night LIMIT 1"

@@ -101,12 +101,13 @@ func NewAIService(c cache.Cache, cfg *config.Config, log *zap.Logger) AIService 
 }
 
 func (s *aiService) Chat(ctx context.Context, rooms []domain.Room, activeOrders, pendingComplaints int, msgs []domain.ChatMessage) (string, []string, error) {
-	roomsJSON, _ := json.Marshal(rooms)
+	roomTypesJSON, _ := json.Marshal(buildRoomTypeAvailability(rooms))
 	system := fmt.Sprintf(
 		"You are the AI concierge for Hotel Harmony. Answer in the user's language. "+
 			"Use only the hotel data included here; do not invent room numbers, prices, orders, or complaints. "+
-			"Rooms: %s. Active orders: %d. Pending complaints: %d.",
-		string(roomsJSON), activeOrders, pendingComplaints,
+			"Guests choose room type only; do not reveal physical room numbers before a booking exists. "+
+			"Available room types: %s. Active orders: %d. Pending complaints: %d.",
+		string(roomTypesJSON), activeOrders, pendingComplaints,
 	)
 
 	messages := make([]groqMessage, 0, len(msgs)+1)
@@ -118,19 +119,73 @@ func (s *aiService) Chat(ctx context.Context, rooms []domain.Room, activeOrders,
 	reply, err := s.callGroq(ctx, messages, "text")
 	if err != nil {
 		var available []string
-		for _, r := range rooms {
-			if r.Status == domain.RoomStatusAvailable {
-				available = append(available, fmt.Sprintf("Room %s (%s, $%.0f/night)", r.RoomNumber, r.RoomType, r.PricePerNight))
-			}
+		for _, r := range buildRoomTypeAvailability(rooms) {
+			available = append(available, fmt.Sprintf("%s (%d available, from $%.0f/night)", r.RoomType, r.AvailableCount, r.PricePerNight))
 		}
 		if len(available) > 0 {
-			reply = fmt.Sprintf("I can help with that. Available rooms right now: %s.", strings.Join(available[:min(5, len(available))], ", "))
+			reply = fmt.Sprintf("I can help with that. Available room types right now: %s. Choose a type and the system will assign a room after booking.", strings.Join(available[:min(5, len(available))], ", "))
 		} else {
 			reply = "I can help with hotel services, but no available rooms are listed right now."
 		}
 		return reply, []string{"local_fallback"}, nil
 	}
 	return reply, []string{"groq_chat_completion"}, nil
+}
+
+type aiRoomAvailability struct {
+	RoomType       string   `json:"room_type"`
+	AvailableCount int      `json:"available_count"`
+	Capacity       int      `json:"capacity"`
+	PricePerNight  float64  `json:"price_per_night"`
+	Amenities      []string `json:"amenities,omitempty"`
+}
+
+func buildRoomTypeAvailability(rooms []domain.Room) []aiRoomAvailability {
+	type groupedRoom struct {
+		aiRoomAvailability
+		amenitySet map[string]struct{}
+	}
+	grouped := map[string]*groupedRoom{}
+	for _, room := range rooms {
+		if room.Status != domain.RoomStatusAvailable {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(room.RoomType))
+		if key == "" {
+			key = "standard"
+		}
+		if _, ok := grouped[key]; !ok {
+			grouped[key] = &groupedRoom{
+				aiRoomAvailability: aiRoomAvailability{
+					RoomType:       roomTypeLabel(room.RoomType),
+					AvailableCount: 0,
+					Capacity:       room.Capacity,
+					PricePerNight:  room.PricePerNight,
+				},
+				amenitySet: map[string]struct{}{},
+			}
+		}
+		item := grouped[key]
+		item.AvailableCount++
+		if room.Capacity > item.Capacity {
+			item.Capacity = room.Capacity
+		}
+		if item.PricePerNight == 0 || room.PricePerNight < item.PricePerNight {
+			item.PricePerNight = room.PricePerNight
+		}
+		for _, amenity := range room.Amenities {
+			if _, ok := item.amenitySet[amenity]; !ok {
+				item.amenitySet[amenity] = struct{}{}
+				item.Amenities = append(item.Amenities, amenity)
+			}
+		}
+	}
+
+	out := make([]aiRoomAvailability, 0, len(grouped))
+	for _, item := range grouped {
+		out = append(out, item.aiRoomAvailability)
+	}
+	return out
 }
 
 func (s *aiService) MenuSuggestions(ctx context.Context, req MenuSuggestionsRequest) (map[string]interface{}, error) {

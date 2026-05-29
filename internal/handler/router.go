@@ -34,6 +34,7 @@ func Register(app *fiber.App, h Handlers) {
 				"GET /api/payment-config",
 				"GET /api/exchange-rate",
 				"POST /api/bookings/checkout",
+				"POST /api/bookings/hold",
 				"POST /api/payments/checkout",
 				"POST /api/payments/complete",
 				"GET /api/dashboard/stats",

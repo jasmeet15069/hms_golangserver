@@ -33,7 +33,8 @@ var zeroDecimalCurrencies = map[string]bool{
 
 // BookingCheckoutRequest contains all inputs for a new booking checkout.
 type BookingCheckoutRequest struct {
-	RoomID       uuid.UUID `json:"room_id" validate:"required"`
+	RoomID       uuid.UUID `json:"room_id"`
+	RoomType     string    `json:"room_type"`
 	UserID       uuid.UUID `json:"user_id" validate:"required"`
 	Currency     string    `json:"currency"`
 	CheckInDate  time.Time `json:"check_in_date" validate:"required"`
@@ -56,6 +57,7 @@ type CheckoutResult struct {
 // PaymentService orchestrates Stripe checkout and payment completion.
 type PaymentService interface {
 	BookingCheckout(ctx context.Context, req BookingCheckoutRequest) (*CheckoutResult, error)
+	HoldBooking(ctx context.Context, req BookingCheckoutRequest) (*CheckoutResult, error)
 	PaymentCheckout(ctx context.Context, paymentID uuid.UUID, currency, country, originURL string) (*CheckoutResult, error)
 	CompletePayment(ctx context.Context, paymentID uuid.UUID, sessionID string) error
 	GetConfig(ctx context.Context) map[string]interface{}
@@ -89,6 +91,64 @@ func NewPaymentService(
 	}
 }
 
+func normalizedRoomType(roomType string) string {
+	return strings.ToLower(strings.TrimSpace(roomType))
+}
+
+func bookingRoomLockKey(req BookingCheckoutRequest) (string, error) {
+	if req.RoomID != uuid.Nil {
+		return req.RoomID.String(), nil
+	}
+	roomType := normalizedRoomType(req.RoomType)
+	if roomType == "" {
+		return "", fmt.Errorf("room type is required")
+	}
+	return "type:" + roomType, nil
+}
+
+func bookingNights(checkIn, checkOut time.Time) int {
+	nights := int(checkOut.Sub(checkIn).Hours() / 24)
+	if nights < 1 {
+		return 1
+	}
+	return nights
+}
+
+func roomTypeLabel(roomType string) string {
+	parts := strings.Fields(strings.ReplaceAll(strings.TrimSpace(roomType), "_", " "))
+	if len(parts) == 0 {
+		return "Selected"
+	}
+	for i, part := range parts {
+		lower := strings.ToLower(part)
+		parts[i] = strings.ToUpper(lower[:1]) + lower[1:]
+	}
+	return strings.Join(parts, " ")
+}
+
+func (s *paymentService) resolveBookingRoom(ctx context.Context, req BookingCheckoutRequest) (*domain.Room, error) {
+	var (
+		room *domain.Room
+		err  error
+	)
+	if req.RoomID != uuid.Nil {
+		room, err = s.roomRepo.FindRoomByID(ctx, req.RoomID)
+	} else {
+		roomType := normalizedRoomType(req.RoomType)
+		if roomType == "" {
+			return nil, fmt.Errorf("room type is required")
+		}
+		room, err = s.roomRepo.FindAvailableRoom(ctx, &roomType)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("selected room type is no longer available")
+	}
+	if room.Status != domain.RoomStatusAvailable {
+		return nil, fmt.Errorf("selected room type is no longer available")
+	}
+	return room, nil
+}
+
 // BookingCheckout creates a guest_stay, payment record, and Stripe session.
 func (s *paymentService) BookingCheckout(ctx context.Context, req BookingCheckoutRequest) (*CheckoutResult, error) {
 	if _, err := s.stripeSecretKey(ctx); err != nil {
@@ -97,7 +157,11 @@ func (s *paymentService) BookingCheckout(ctx context.Context, req BookingCheckou
 	if err := s.ensureStripeChargesEnabled(ctx); err != nil {
 		return nil, err
 	}
-	lockKey := fmt.Sprintf("lock:booking:%s:%s:%s:%s", req.UserID, req.RoomID, req.CheckInDate.Format("2006-01-02"), req.CheckOutDate.Format("2006-01-02"))
+	allocationKey, err := bookingRoomLockKey(req)
+	if err != nil {
+		return nil, err
+	}
+	lockKey := fmt.Sprintf("lock:booking:%s:%s:%s:%s", req.UserID, allocationKey, req.CheckInDate.Format("2006-01-02"), req.CheckOutDate.Format("2006-01-02"))
 	locked, err := s.cache.SetNX(ctx, lockKey, "1", cache.TTLLock)
 	if err != nil {
 		s.log.Warn("booking lock unavailable", zap.Error(err))
@@ -112,14 +176,10 @@ func (s *paymentService) BookingCheckout(ctx context.Context, req BookingCheckou
 		currency = "USD"
 	}
 
-	nights := int(req.CheckOutDate.Sub(req.CheckInDate).Hours() / 24)
-	if nights < 1 {
-		nights = 1
-	}
-
-	room, err := s.roomRepo.FindRoomByID(ctx, req.RoomID)
-	if err != nil || room.Status != domain.RoomStatusAvailable {
-		return nil, fmt.Errorf("room is no longer available")
+	nights := bookingNights(req.CheckInDate, req.CheckOutDate)
+	room, err := s.resolveBookingRoom(ctx, req)
+	if err != nil {
+		return nil, err
 	}
 
 	usdAmount := room.PricePerNight * float64(nights)
@@ -140,7 +200,7 @@ func (s *paymentService) BookingCheckout(ctx context.Context, req BookingCheckou
 
 	stay, err := s.roomRepo.CreateStay(ctx, &domain.GuestStay{
 		GuestID:      &req.UserID,
-		RoomID:       req.RoomID,
+		RoomID:       room.ID,
 		GuestName:    guestName,
 		GuestEmail:   guestEmail,
 		GuestPhone:   guestPhone,
@@ -156,7 +216,7 @@ func (s *paymentService) BookingCheckout(ctx context.Context, req BookingCheckou
 
 	payNum := fmt.Sprintf("PAY-%s-%s", time.Now().Format("150405"), strings.ToUpper(stay.ID.String()[:6]))
 	payMethod := "stripe"
-	payNotes := fmt.Sprintf("Room %s booking for %d night(s) in %s", room.RoomNumber, nights, currency)
+	payNotes := fmt.Sprintf("%s room booking for %d night(s) in %s. Assigned room: %s", roomTypeLabel(room.RoomType), nights, currency, room.RoomNumber)
 	payment, err := s.paymentRepo.Create(ctx, &domain.Payment{
 		PaymentNumber: payNum,
 		GuestStayID:   &stay.ID,
@@ -170,10 +230,11 @@ func (s *paymentService) BookingCheckout(ctx context.Context, req BookingCheckou
 		return nil, fmt.Errorf("create payment: %w", err)
 	}
 
-	_ = s.roomRepo.UpdateRoomStatus(ctx, req.RoomID, domain.RoomStatusOccupied)
+	_ = s.roomRepo.UpdateRoomStatus(ctx, room.ID, domain.RoomStatusOccupied)
 	_ = s.cache.Delete(ctx, cache.KeyDashboardStats(), cache.KeyRoomList("all"), cache.KeyRoomList(string(domain.RoomStatusAvailable)), cache.KeyRoomList(string(domain.RoomStatusOccupied)))
 
-	description := fmt.Sprintf("Room %s - %s - %d night(s)", room.RoomNumber, room.RoomType, nights)
+	roomType := roomTypeLabel(room.RoomType)
+	description := fmt.Sprintf("%s room - %d night(s). Room number assigned after booking.", roomType, nights)
 	successURL := fmt.Sprintf("%s/guest?booking=success&stay_id=%s&payment_id=%s&session_id={CHECKOUT_SESSION_ID}",
 		req.OriginURL, stay.ID, payment.ID)
 	cancelURL := fmt.Sprintf("%s/guest?booking=cancelled&stay_id=%s", req.OriginURL, stay.ID)
@@ -184,9 +245,9 @@ func (s *paymentService) BookingCheckout(ctx context.Context, req BookingCheckou
 		GuestEmail:     req.GuestEmail,
 		StayID:         stay.ID,
 		PaymentID:      payment.ID,
-		RoomID:         req.RoomID,
+		RoomID:         room.ID,
 		Country:        req.Country,
-		ProductName:    fmt.Sprintf("Hotel Room %s Booking", room.RoomNumber),
+		ProductName:    fmt.Sprintf("Hotel %s Room Booking", roomType),
 		Description:    description,
 		SuccessURL:     successURL,
 		CancelURL:      cancelURL,
@@ -195,7 +256,7 @@ func (s *paymentService) BookingCheckout(ctx context.Context, req BookingCheckou
 	if err != nil {
 		_ = s.paymentRepo.Delete(ctx, payment.ID)
 		_ = s.roomRepo.DeleteStay(ctx, stay.ID)
-		_ = s.roomRepo.UpdateRoomStatus(ctx, req.RoomID, domain.RoomStatusAvailable)
+		_ = s.roomRepo.UpdateRoomStatus(ctx, room.ID, domain.RoomStatusAvailable)
 		return nil, fmt.Errorf("Stripe checkout failed: %w", err)
 	}
 
@@ -204,6 +265,80 @@ func (s *paymentService) BookingCheckout(ctx context.Context, req BookingCheckou
 		SessionID:   session.ID,
 		StayID:      stay.ID,
 		PaymentID:   payment.ID,
+	}, nil
+}
+
+// HoldBooking creates a pending booking without exposing a physical room before the hold exists.
+func (s *paymentService) HoldBooking(ctx context.Context, req BookingCheckoutRequest) (*CheckoutResult, error) {
+	allocationKey, err := bookingRoomLockKey(req)
+	if err != nil {
+		return nil, err
+	}
+	lockKey := fmt.Sprintf("lock:hold:%s:%s:%s:%s", req.UserID, allocationKey, req.CheckInDate.Format("2006-01-02"), req.CheckOutDate.Format("2006-01-02"))
+	locked, err := s.cache.SetNX(ctx, lockKey, "1", cache.TTLLock)
+	if err != nil {
+		s.log.Warn("booking hold lock unavailable", zap.Error(err))
+	} else if !locked {
+		return nil, fmt.Errorf("booking is already being processed")
+	} else {
+		defer func() { _ = s.cache.Delete(context.Background(), lockKey) }()
+	}
+
+	room, err := s.resolveBookingRoom(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	nights := bookingNights(req.CheckInDate, req.CheckOutDate)
+	usdAmount := room.PricePerNight * float64(nights)
+	guestName := req.GuestName
+	if guestName == "" {
+		guestName = "Guest"
+	}
+	guestEmail := &req.GuestEmail
+	guestPhone := &req.GuestPhone
+	roomType := roomTypeLabel(room.RoomType)
+	notes := fmt.Sprintf("Guest portal hold. Country: %s. Requested type: %s. Room number assigned after booking.", req.Country, roomType)
+
+	stay, err := s.roomRepo.CreateStay(ctx, &domain.GuestStay{
+		GuestID:      &req.UserID,
+		RoomID:       room.ID,
+		GuestName:    guestName,
+		GuestEmail:   guestEmail,
+		GuestPhone:   guestPhone,
+		CheckInDate:  req.CheckInDate,
+		CheckOutDate: req.CheckOutDate,
+		TotalAmount:  &usdAmount,
+		Notes:        &notes,
+		CreatedBy:    &req.UserID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create stay: %w", err)
+	}
+
+	payNum := fmt.Sprintf("PAY-%s-%s", time.Now().Format("150405"), strings.ToUpper(stay.ID.String()[:6]))
+	payMethod := "hold"
+	payNotes := fmt.Sprintf("%s room hold for %d night(s). Assigned room: %s", roomType, nights, room.RoomNumber)
+	payment, err := s.paymentRepo.Create(ctx, &domain.Payment{
+		PaymentNumber: payNum,
+		GuestStayID:   &stay.ID,
+		Amount:        usdAmount,
+		PaymentMethod: payMethod,
+		Status:        domain.PaymentStatusPending,
+		ProcessedBy:   &req.UserID,
+		Notes:         &payNotes,
+	})
+	if err != nil {
+		_ = s.roomRepo.DeleteStay(ctx, stay.ID)
+		return nil, fmt.Errorf("create payment: %w", err)
+	}
+
+	_ = s.roomRepo.UpdateRoomStatus(ctx, room.ID, domain.RoomStatusOccupied)
+	_ = s.cache.Delete(ctx, cache.KeyDashboardStats(), cache.KeyRoomList("all"), cache.KeyRoomList(string(domain.RoomStatusAvailable)), cache.KeyRoomList(string(domain.RoomStatusOccupied)))
+
+	return &CheckoutResult{
+		StayID:    stay.ID,
+		PaymentID: payment.ID,
 	}, nil
 }
 

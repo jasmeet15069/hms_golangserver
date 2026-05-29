@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -28,6 +30,7 @@ func (h *PaymentHandler) Register(r fiber.Router) {
 	r.Get("/payment-config", h.Config)
 	r.Get("/exchange-rate", h.ExchangeRate)
 	r.Post("/bookings/checkout", h.BookingCheckout)
+	r.Post("/bookings/hold", h.HoldBooking)
 	r.Post("/payments/checkout", h.PaymentCheckout)
 	r.Post("/payments/complete", h.CompletePayment)
 }
@@ -48,6 +51,7 @@ func (h *PaymentHandler) ExchangeRate(c *fiber.Ctx) error {
 
 type bookingCheckoutRequest struct {
 	RoomID       string `json:"room_id"`
+	RoomType     string `json:"room_type"`
 	UserID       string `json:"user_id"`
 	Currency     string `json:"currency"`
 	CheckInDate  string `json:"check_in_date"`
@@ -58,33 +62,37 @@ type bookingCheckoutRequest struct {
 	Country      string `json:"country"`
 }
 
-func (h *PaymentHandler) BookingCheckout(c *fiber.Ctx) error {
-	if !requireAuthenticatedRequest(c, h.secretKey) {
-		return nil
-	}
-
+func parseBookingPayload(c *fiber.Ctx) (bookingCheckoutRequest, service.BookingCheckoutRequest, error) {
 	var req bookingCheckoutRequest
 	if err := c.BodyParser(&req); err != nil {
-		return response.Error(c, fiber.StatusBadRequest, "invalid request body")
+		return req, service.BookingCheckoutRequest{}, errors.New("invalid request body")
 	}
-	roomID, err := uuid.Parse(req.RoomID)
-	if err != nil {
-		return response.Error(c, fiber.StatusBadRequest, "invalid room id")
+	var roomID uuid.UUID
+	if strings.TrimSpace(req.RoomID) != "" {
+		parsedRoomID, err := uuid.Parse(req.RoomID)
+		if err != nil {
+			return req, service.BookingCheckoutRequest{}, errors.New("invalid room id")
+		}
+		roomID = parsedRoomID
+	}
+	if roomID == uuid.Nil && strings.TrimSpace(req.RoomType) == "" {
+		return req, service.BookingCheckoutRequest{}, errors.New("room type is required")
 	}
 	userID, err := uuid.Parse(req.UserID)
 	if err != nil {
-		return response.Error(c, fiber.StatusBadRequest, "invalid user id")
+		return req, service.BookingCheckoutRequest{}, errors.New("invalid user id")
 	}
 	checkIn, err := parseDate(req.CheckInDate)
 	if err != nil {
-		return response.Error(c, fiber.StatusBadRequest, "invalid check-in date")
+		return req, service.BookingCheckoutRequest{}, errors.New("invalid check-in date")
 	}
 	checkOut, err := parseDate(req.CheckOutDate)
 	if err != nil {
-		return response.Error(c, fiber.StatusBadRequest, "invalid check-out date")
+		return req, service.BookingCheckoutRequest{}, errors.New("invalid check-out date")
 	}
-	result, err := h.payments.BookingCheckout(c.Context(), service.BookingCheckoutRequest{
+	return req, service.BookingCheckoutRequest{
 		RoomID:       roomID,
+		RoomType:     req.RoomType,
 		UserID:       userID,
 		Currency:     req.Currency,
 		CheckInDate:  checkIn,
@@ -94,7 +102,35 @@ func (h *PaymentHandler) BookingCheckout(c *fiber.Ctx) error {
 		GuestPhone:   req.GuestPhone,
 		Country:      req.Country,
 		OriginURL:    origin(c),
-	})
+	}, nil
+}
+
+func (h *PaymentHandler) BookingCheckout(c *fiber.Ctx) error {
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
+	}
+
+	_, bookingReq, err := parseBookingPayload(c)
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	result, err := h.payments.BookingCheckout(c.Context(), bookingReq)
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	return response.OK(c, result)
+}
+
+func (h *PaymentHandler) HoldBooking(c *fiber.Ctx) error {
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
+	}
+
+	_, bookingReq, err := parseBookingPayload(c)
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	result, err := h.payments.HoldBooking(c.Context(), bookingReq)
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
