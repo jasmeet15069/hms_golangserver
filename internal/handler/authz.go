@@ -11,9 +11,8 @@ import (
 )
 
 func jwtClaimsFromRequest(c *fiber.Ctx, secret string) (jwt.MapClaims, error) {
-	authHeader := c.Get("Authorization")
-	tokenString := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
-	if tokenString == "" || tokenString == authHeader || secret == "" {
+	tokenString := authTokenFromRequest(c)
+	if tokenString == "" || secret == "" {
 		return nil, fmt.Errorf("missing bearer token")
 	}
 
@@ -32,6 +31,15 @@ func jwtClaimsFromRequest(c *fiber.Ctx, secret string) (jwt.MapClaims, error) {
 		return nil, fmt.Errorf("invalid bearer token")
 	}
 	return claims, nil
+}
+
+func authTokenFromRequest(c *fiber.Ctx) string {
+	authHeader := c.Get("Authorization")
+	tokenString := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+	if tokenString != "" && tokenString != authHeader {
+		return tokenString
+	}
+	return strings.TrimSpace(c.Cookies("hotelops_session"))
 }
 
 func requireAuthenticatedRequest(c *fiber.Ctx, secret string) bool {

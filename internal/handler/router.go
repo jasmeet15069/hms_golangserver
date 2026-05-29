@@ -28,6 +28,7 @@ func Register(app *fiber.App, h Handlers) {
 				"GET /health",
 				"POST /api/auth/sign-in",
 				"POST /api/auth/sign-up",
+				"POST /api/auth/sign-out",
 				"GET /api/hotel/branding",
 				"PUT /api/hotel/branding",
 				"POST /api/onboarding/hotel",

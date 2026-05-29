@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -707,26 +706,8 @@ func rolePortalModuleByPath(path string) string {
 }
 
 func (h *OperationsHandler) requireHotelAdmin(c *fiber.Ctx) bool {
-	authHeader := c.Get("Authorization")
-	tokenString := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
-	if tokenString == "" || h.secretKey == "" {
-		_ = response.Error(c, fiber.StatusUnauthorized, "staff authentication is required")
-		return false
-	}
-
-	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("invalid signing method")
-		}
-		return []byte(h.secretKey), nil
-	})
-	if err != nil || !token.Valid {
-		_ = response.Error(c, fiber.StatusUnauthorized, "invalid staff token")
-		return false
-	}
-
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
+	claims, err := jwtClaimsFromRequest(c, h.secretKey)
+	if err != nil {
 		_ = response.Error(c, fiber.StatusUnauthorized, "invalid staff token")
 		return false
 	}

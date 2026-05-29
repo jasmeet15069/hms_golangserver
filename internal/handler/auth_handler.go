@@ -1,6 +1,10 @@
 package handler
 
 import (
+	"net/url"
+	"strings"
+	"time"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 
@@ -21,6 +25,7 @@ func NewAuthHandler(auth service.AuthService, validate *validator.Validator) *Au
 func (h *AuthHandler) Register(r fiber.Router) {
 	r.Post("/auth/sign-up", h.SignUp)
 	r.Post("/auth/sign-in", h.SignIn)
+	r.Post("/auth/sign-out", h.SignOut)
 	r.Post("/auth/refresh", h.Refresh)
 	r.Patch("/auth/user", h.UpdatePassword)
 }
@@ -43,6 +48,7 @@ func (h *AuthHandler) SignUp(c *fiber.Ctx) error {
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
+	setAuthCookies(c, session)
 	return response.OK(c, session)
 }
 
@@ -63,7 +69,13 @@ func (h *AuthHandler) SignIn(c *fiber.Ctx) error {
 	if err != nil {
 		return response.Error(c, fiber.StatusUnauthorized, err.Error())
 	}
+	setAuthCookies(c, session)
 	return response.OK(c, session)
+}
+
+func (h *AuthHandler) SignOut(c *fiber.Ctx) error {
+	clearAuthCookies(c)
+	return response.OK(c, map[string]string{"status": "signed_out"})
 }
 
 type refreshRequest struct {
@@ -79,6 +91,7 @@ func (h *AuthHandler) Refresh(c *fiber.Ctx) error {
 	if err != nil {
 		return response.Error(c, fiber.StatusUnauthorized, err.Error())
 	}
+	setAuthCookies(c, session)
 	return response.OK(c, session)
 }
 
@@ -104,4 +117,58 @@ func (h *AuthHandler) UpdatePassword(c *fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
 	}
 	return response.OK(c, map[string]string{"status": "updated"})
+}
+
+func setAuthCookies(c *fiber.Ctx, session *service.Session) {
+	if session == nil {
+		return
+	}
+	secure := isSecureRequest(c)
+	maxAge := int(session.ExpiresIn)
+	if maxAge <= 0 {
+		maxAge = 15 * 60
+	}
+	c.Cookie(&fiber.Cookie{
+		Name:     "hotelops_session",
+		Value:    session.AccessToken,
+		Path:     "/",
+		MaxAge:   maxAge,
+		Secure:   secure,
+		HTTPOnly: true,
+		SameSite: "Lax",
+	})
+	if session.User != nil {
+		c.Cookie(&fiber.Cookie{
+			Name:     "hotelops_login_email",
+			Value:    url.QueryEscape(session.User.Email),
+			Path:     "/",
+			MaxAge:   30 * 24 * 60 * 60,
+			Secure:   secure,
+			HTTPOnly: false,
+			SameSite: "Lax",
+		})
+	}
+}
+
+func clearAuthCookies(c *fiber.Ctx) {
+	secure := isSecureRequest(c)
+	expired := time.Now().Add(-time.Hour)
+	for _, name := range []string{"hotelops_session", "hotelops_login_email"} {
+		c.Cookie(&fiber.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			Expires:  expired,
+			Secure:   secure,
+			HTTPOnly: name == "hotelops_session",
+			SameSite: "Lax",
+		})
+	}
+}
+
+func isSecureRequest(c *fiber.Ctx) bool {
+	return strings.EqualFold(c.Protocol(), "https") ||
+		strings.EqualFold(c.Get("X-Forwarded-Proto"), "https") ||
+		strings.EqualFold(c.Get("X-Forwarded-Ssl"), "on")
 }
