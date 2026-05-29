@@ -50,6 +50,8 @@ func Register(app *fiber.App, h Handlers) {
 				"POST /api/functions/ai-complaint-analysis",
 				"GET /api/settings/payment",
 				"PUT /api/settings/payment",
+				"GET /api/settings/role-portals",
+				"PUT /api/settings/role-portals",
 			},
 		})
 	})

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
@@ -45,6 +46,8 @@ func (h *OperationsHandler) Register(r fiber.Router) {
 	r.Get("/reports/ai-usage", h.AIUsageReport)
 	r.Get("/settings/payment", h.PaymentSettings)
 	r.Put("/settings/payment", h.UpdatePaymentSettings)
+	r.Get("/settings/role-portals", h.RolePortalSettings)
+	r.Put("/settings/role-portals", h.UpdateRolePortalSettings)
 }
 
 type housekeepingRequest struct {
@@ -396,6 +399,311 @@ func (h *OperationsHandler) UpdatePaymentSettings(c *fiber.Ctx) error {
 	})
 
 	return h.PaymentSettings(c)
+}
+
+type rolePortalDefault struct {
+	Role           string
+	Label          string
+	Description    string
+	DefaultPath    string
+	VisibleModules []string
+}
+
+var rolePortalDefaults = []rolePortalDefault{
+	{
+		Role:           "super_admin",
+		Label:          "Hotel Admin (Owner)",
+		Description:    "Owner control across setup, staff, reports, payments, and all operations.",
+		DefaultPath:    "/dashboard",
+		VisibleModules: []string{"dashboard", "rooms", "guests", "housekeeping", "maintenance", "complaints", "payments", "menu", "inventory", "order_queue", "reports", "settings", "staff"},
+	},
+	{
+		Role:           "hotel_admin",
+		Label:          "Hotel Admin",
+		Description:    "Owns hotel setup, billing, staff, and operations.",
+		DefaultPath:    "/dashboard",
+		VisibleModules: []string{"dashboard", "rooms", "guests", "housekeeping", "maintenance", "complaints", "payments", "menu", "inventory", "order_queue", "reports", "settings", "staff"},
+	},
+	{
+		Role:           "property_manager",
+		Label:          "Property Manager",
+		Description:    "Manages property operations and reports.",
+		DefaultPath:    "/dashboard",
+		VisibleModules: []string{"dashboard", "rooms", "guests", "housekeeping", "maintenance", "complaints", "payments", "menu", "inventory", "order_queue", "reports"},
+	},
+	{
+		Role:           "receptionist",
+		Label:          "Receptionist",
+		Description:    "Front desk operations, check-in/out, and guest management.",
+		DefaultPath:    "/guests",
+		VisibleModules: []string{"dashboard", "rooms", "guests", "complaints", "payments"},
+	},
+	{
+		Role:           "admin",
+		Label:          "Receptionist (Legacy)",
+		Description:    "Front desk operations, check-in/out, and guest management.",
+		DefaultPath:    "/guests",
+		VisibleModules: []string{"dashboard", "rooms", "guests", "complaints", "payments"},
+	},
+	{
+		Role:           "housekeeping",
+		Label:          "Housekeeping",
+		Description:    "Room readiness and housekeeping assignments.",
+		DefaultPath:    "/housekeeping",
+		VisibleModules: []string{"housekeeping"},
+	},
+	{
+		Role:           "maintenance",
+		Label:          "Maintenance",
+		Description:    "Work orders and maintenance queues.",
+		DefaultPath:    "/maintenance",
+		VisibleModules: []string{"maintenance"},
+	},
+	{
+		Role:           "food_manager",
+		Label:          "Food Manager",
+		Description:    "Menu CRUD, recipes, suppliers, and food inventory.",
+		DefaultPath:    "/menu",
+		VisibleModules: []string{"dashboard", "menu", "inventory", "complaints"},
+	},
+	{
+		Role:           "kitchen_manager",
+		Label:          "Kitchen Manager",
+		Description:    "Live order queue, cooking workflow, and inventory awareness.",
+		DefaultPath:    "/kitchen",
+		VisibleModules: []string{"dashboard", "order_queue", "inventory"},
+	},
+	{
+		Role:           "waiter",
+		Label:          "Waiter/Kooli",
+		Description:    "Delivery assignments, pickup/delivery status, and active service queue.",
+		DefaultPath:    "/kitchen",
+		VisibleModules: []string{"order_queue"},
+	},
+}
+
+var rolePortalDefaultsByRole = func() map[string]rolePortalDefault {
+	out := make(map[string]rolePortalDefault, len(rolePortalDefaults))
+	for _, item := range rolePortalDefaults {
+		out[item.Role] = item
+	}
+	return out
+}()
+
+var rolePortalModulePath = map[string]string{
+	"dashboard":    "/dashboard",
+	"rooms":        "/rooms",
+	"guests":       "/guests",
+	"housekeeping": "/housekeeping",
+	"maintenance":  "/maintenance",
+	"complaints":   "/complaints",
+	"payments":     "/payments",
+	"menu":         "/menu",
+	"inventory":    "/inventory",
+	"order_queue":  "/kitchen",
+	"reports":      "/reports",
+	"settings":     "/settings",
+	"staff":        "/staff",
+	"platform":     "/platform",
+}
+
+type updateRolePortalSettingsRequest struct {
+	Role           string   `json:"role"`
+	DefaultPath    string   `json:"default_path"`
+	VisibleModules []string `json:"visible_modules"`
+}
+
+func (h *OperationsHandler) RolePortalSettings(c *fiber.Ctx) error {
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
+	}
+	if err := h.ensureRolePortalSettings(c); err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	rows, err := h.pool.Query(c.Context(), `
+		SELECT role, default_path, visible_modules, locked, updated_at
+		FROM role_portal_settings
+		WHERE hotel_id = $1`,
+		postgres.DemoHotelID,
+	)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	defer rows.Close()
+
+	settingsByRole := map[string]map[string]interface{}{}
+	for rows.Next() {
+		var role, defaultPath string
+		var rawModules []byte
+		var locked bool
+		var updatedAt time.Time
+		if err := rows.Scan(&role, &defaultPath, &rawModules, &locked, &updatedAt); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, err.Error())
+		}
+		settingsByRole[role] = rolePortalPayload(role, defaultPath, rawModules, locked, updatedAt)
+	}
+	if err := rows.Err(); err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	out := make([]map[string]interface{}, 0, len(rolePortalDefaults))
+	for _, def := range rolePortalDefaults {
+		if item, ok := settingsByRole[def.Role]; ok {
+			out = append(out, item)
+			continue
+		}
+		raw, _ := json.Marshal(def.VisibleModules)
+		out = append(out, rolePortalPayload(def.Role, def.DefaultPath, raw, false, time.Now().UTC()))
+	}
+	return response.OK(c, out)
+}
+
+func (h *OperationsHandler) UpdateRolePortalSettings(c *fiber.Ctx) error {
+	if !h.requireHotelAdmin(c) {
+		return nil
+	}
+	var req updateRolePortalSettingsRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid request body")
+	}
+	role := strings.ToLower(strings.TrimSpace(req.Role))
+	def, ok := rolePortalDefaultsByRole[role]
+	if !ok {
+		return response.Error(c, fiber.StatusUnprocessableEntity, "unknown role")
+	}
+	defaultPath := strings.TrimSpace(req.DefaultPath)
+	if defaultPath == "" {
+		defaultPath = def.DefaultPath
+	}
+	if !rolePortalPathAllowed(defaultPath, def.VisibleModules) {
+		return response.Error(c, fiber.StatusUnprocessableEntity, "default_path must point to a module this role can use")
+	}
+	visibleModules := sanitizeRolePortalModules(req.VisibleModules, def.VisibleModules, defaultPath)
+	rawModules, _ := json.Marshal(visibleModules)
+
+	if err := h.ensureRolePortalSettings(c); err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	var updatedAt time.Time
+	var locked bool
+	err := h.pool.QueryRow(c.Context(), `
+		INSERT INTO role_portal_settings (hotel_id, role, default_path, visible_modules, locked, updated_at)
+		VALUES ($1,$2,$3,$4::jsonb,false,now())
+		ON CONFLICT (hotel_id, role) DO UPDATE
+		  SET default_path = EXCLUDED.default_path,
+		      visible_modules = EXCLUDED.visible_modules,
+		      updated_at = now()
+		RETURNING locked, updated_at`,
+		postgres.DemoHotelID, role, defaultPath, string(rawModules),
+	).Scan(&locked, &updatedAt)
+	if err != nil {
+		return response.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	h.audit(c, postgres.DemoHotelID, nil, "UPDATE", "role_portal_settings", postgres.DemoHotelID, map[string]interface{}{
+		"role":            role,
+		"default_path":    defaultPath,
+		"visible_modules": visibleModules,
+	})
+
+	return response.OK(c, rolePortalPayload(role, defaultPath, rawModules, locked, updatedAt))
+}
+
+func (h *OperationsHandler) ensureRolePortalSettings(c *fiber.Ctx) error {
+	if _, err := h.pool.Exec(c.Context(), `
+		CREATE TABLE IF NOT EXISTS role_portal_settings (
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			hotel_id UUID NOT NULL REFERENCES hotels(id) ON DELETE CASCADE,
+			role VARCHAR(50) NOT NULL,
+			default_path TEXT NOT NULL,
+			visible_modules JSONB NOT NULL DEFAULT '[]',
+			locked BOOLEAN NOT NULL DEFAULT FALSE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (hotel_id, role)
+		)`); err != nil {
+		return err
+	}
+	for _, def := range rolePortalDefaults {
+		raw, _ := json.Marshal(def.VisibleModules)
+		if _, err := h.pool.Exec(c.Context(), `
+			INSERT INTO role_portal_settings (hotel_id, role, default_path, visible_modules)
+			VALUES ($1,$2,$3,$4::jsonb)
+			ON CONFLICT (hotel_id, role) DO NOTHING`,
+			postgres.DemoHotelID, def.Role, def.DefaultPath, string(raw),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rolePortalPayload(role, defaultPath string, rawModules []byte, locked bool, updatedAt time.Time) map[string]interface{} {
+	def := rolePortalDefaultsByRole[role]
+	visibleModules := []string{}
+	_ = json.Unmarshal(rawModules, &visibleModules)
+	if len(visibleModules) == 0 {
+		visibleModules = append(visibleModules, def.VisibleModules...)
+	}
+	return map[string]interface{}{
+		"role":            role,
+		"label":           def.Label,
+		"description":     def.Description,
+		"default_path":    defaultPath,
+		"visible_modules": visibleModules,
+		"locked":          locked,
+		"updated_at":      updatedAt,
+	}
+}
+
+func sanitizeRolePortalModules(input, allowed []string, defaultPath string) []string {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, module := range allowed {
+		allowedSet[module] = struct{}{}
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(input))
+	for _, module := range input {
+		module = strings.TrimSpace(module)
+		if _, ok := allowedSet[module]; !ok {
+			continue
+		}
+		if _, exists := seen[module]; exists {
+			continue
+		}
+		seen[module] = struct{}{}
+		out = append(out, module)
+	}
+	defaultModule := rolePortalModuleByPath(defaultPath)
+	if defaultModule != "" {
+		if _, ok := seen[defaultModule]; !ok {
+			out = append([]string{defaultModule}, out...)
+		}
+	}
+	if len(out) == 0 && len(allowed) > 0 {
+		out = append(out, allowed[0])
+	}
+	return out
+}
+
+func rolePortalPathAllowed(path string, modules []string) bool {
+	for _, module := range modules {
+		if rolePortalModulePath[module] == path {
+			return true
+		}
+	}
+	return false
+}
+
+func rolePortalModuleByPath(path string) string {
+	for module, modulePath := range rolePortalModulePath {
+		if modulePath == path {
+			return module
+		}
+	}
+	return ""
 }
 
 func (h *OperationsHandler) requireHotelAdmin(c *fiber.Ctx) bool {
