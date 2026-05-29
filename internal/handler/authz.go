@@ -34,22 +34,25 @@ func jwtClaimsFromRequest(c *fiber.Ctx, secret string) (jwt.MapClaims, error) {
 	return claims, nil
 }
 
-func requireAuthenticatedRequest(c *fiber.Ctx, secret string) error {
+func requireAuthenticatedRequest(c *fiber.Ctx, secret string) bool {
 	if _, err := jwtClaimsFromRequest(c, secret); err != nil {
-		return response.Error(c, fiber.StatusUnauthorized, "authentication is required")
+		_ = response.Error(c, fiber.StatusUnauthorized, "authentication is required")
+		return false
 	}
-	return nil
+	return true
 }
 
-func requireAnyRoleFromToken(c *fiber.Ctx, secret string, allowed ...string) error {
+func requireAnyRoleFromToken(c *fiber.Ctx, secret string, allowed ...string) bool {
 	claims, err := jwtClaimsFromRequest(c, secret)
 	if err != nil {
-		return response.Error(c, fiber.StatusUnauthorized, "authentication is required")
+		_ = response.Error(c, fiber.StatusUnauthorized, "authentication is required")
+		return false
 	}
 
 	rawRoles, ok := claims["roles"].([]interface{})
 	if !ok {
-		return response.Error(c, fiber.StatusForbidden, "required role is missing")
+		_ = response.Error(c, fiber.StatusForbidden, "required role is missing")
+		return false
 	}
 	allowedSet := make(map[string]struct{}, len(allowed))
 	for _, role := range allowed {
@@ -58,8 +61,9 @@ func requireAnyRoleFromToken(c *fiber.Ctx, secret string, allowed ...string) err
 	for _, rawRole := range rawRoles {
 		role, _ := rawRole.(string)
 		if _, ok := allowedSet[role]; ok {
-			return nil
+			return true
 		}
 	}
-	return response.Error(c, fiber.StatusForbidden, "access denied")
+	_ = response.Error(c, fiber.StatusForbidden, "access denied")
+	return false
 }

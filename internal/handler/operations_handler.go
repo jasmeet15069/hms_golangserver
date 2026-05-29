@@ -54,8 +54,8 @@ type housekeepingRequest struct {
 }
 
 func (h *OperationsHandler) CreateGuestHousekeepingRequest(c *fiber.Ctx) error {
-	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
-		return err
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
 	}
 
 	var req housekeepingRequest
@@ -268,8 +268,8 @@ type updatePaymentSettingsRequest struct {
 }
 
 func (h *OperationsHandler) UpdatePaymentSettings(c *fiber.Ctx) error {
-	if err := h.requireHotelAdmin(c); err != nil {
-		return err
+	if !h.requireHotelAdmin(c) {
+		return nil
 	}
 
 	var req updatePaymentSettingsRequest
@@ -398,11 +398,12 @@ func (h *OperationsHandler) UpdatePaymentSettings(c *fiber.Ctx) error {
 	return h.PaymentSettings(c)
 }
 
-func (h *OperationsHandler) requireHotelAdmin(c *fiber.Ctx) error {
+func (h *OperationsHandler) requireHotelAdmin(c *fiber.Ctx) bool {
 	authHeader := c.Get("Authorization")
 	tokenString := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
 	if tokenString == "" || h.secretKey == "" {
-		return response.Error(c, fiber.StatusUnauthorized, "staff authentication is required")
+		_ = response.Error(c, fiber.StatusUnauthorized, "staff authentication is required")
+		return false
 	}
 
 	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
@@ -412,26 +413,30 @@ func (h *OperationsHandler) requireHotelAdmin(c *fiber.Ctx) error {
 		return []byte(h.secretKey), nil
 	})
 	if err != nil || !token.Valid {
-		return response.Error(c, fiber.StatusUnauthorized, "invalid staff token")
+		_ = response.Error(c, fiber.StatusUnauthorized, "invalid staff token")
+		return false
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return response.Error(c, fiber.StatusUnauthorized, "invalid staff token")
+		_ = response.Error(c, fiber.StatusUnauthorized, "invalid staff token")
+		return false
 	}
 
 	rawRoles, ok := claims["roles"].([]interface{})
 	if !ok {
-		return response.Error(c, fiber.StatusForbidden, "hotel admin role is required")
+		_ = response.Error(c, fiber.StatusForbidden, "hotel admin role is required")
+		return false
 	}
 	for _, rawRole := range rawRoles {
 		role, _ := rawRole.(string)
 		switch role {
 		case "platform_admin", "hotel_admin", "super_admin":
-			return nil
+			return true
 		}
 	}
-	return response.Error(c, fiber.StatusForbidden, "hotel admin role is required")
+	_ = response.Error(c, fiber.StatusForbidden, "hotel admin role is required")
+	return false
 }
 
 func (h *OperationsHandler) reportCounts(c *fiber.Ctx, name, sql string, keys []string) error {
@@ -456,8 +461,8 @@ func (h *OperationsHandler) audit(c *fiber.Ctx, hotelID uuid.UUID, userID *uuid.
 		INSERT INTO audit_logs (
 			id, hotel_id, user_id, action, table_name, record_id, resource_type, resource_id,
 			new_data, user_agent, ai_triggered, created_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$5,$6,$7,$8,false,now())`,
-		uuid.New(), hotelID, userID, action, resource, resourceID, data, c.Get("User-Agent"),
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false,now())`,
+		uuid.New(), hotelID, userID, action, resource, resourceID, resource, resourceID, data, c.Get("User-Agent"),
 	)
 }
 

@@ -37,8 +37,8 @@ type aiChatRequest struct {
 }
 
 func (h *AIHandler) Chat(c *fiber.Ctx) error {
-	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
-		return err
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
 	}
 
 	var req aiChatRequest
@@ -64,8 +64,8 @@ func (h *AIHandler) Chat(c *fiber.Ctx) error {
 }
 
 func (h *AIHandler) MenuSuggestions(c *fiber.Ctx) error {
-	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
-		return err
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
 	}
 
 	var req service.MenuSuggestionsRequest
@@ -80,8 +80,8 @@ func (h *AIHandler) MenuSuggestions(c *fiber.Ctx) error {
 }
 
 func (h *AIHandler) ComplaintAnalysis(c *fiber.Ctx) error {
-	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
-		return err
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
 	}
 
 	var req service.ComplaintAnalysisRequest
@@ -96,8 +96,8 @@ func (h *AIHandler) ComplaintAnalysis(c *fiber.Ctx) error {
 }
 
 func (h *AIHandler) VoiceAssistantToken(c *fiber.Ctx) error {
-	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
-		return err
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
 	}
 	return response.Error(c, fiber.StatusNotImplemented, "voice assistant realtime token is not configured")
 }

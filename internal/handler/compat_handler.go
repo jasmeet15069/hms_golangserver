@@ -49,8 +49,8 @@ type compatMutation struct {
 }
 
 func (h *CompatHandler) Select(c *fiber.Ctx) error {
-	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
-		return err
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
 	}
 
 	table := c.Params("table")
@@ -103,8 +103,8 @@ func (h *CompatHandler) Select(c *fiber.Ctx) error {
 }
 
 func (h *CompatHandler) Insert(c *fiber.Ctx) error {
-	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
-		return err
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
 	}
 
 	table := c.Params("table")
@@ -117,49 +117,51 @@ func (h *CompatHandler) Insert(c *fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "insert values are required")
 	}
 
-	switch table {
-	case "profiles":
-		return h.insertProfile(c, values, mutationSingle(payload.Single))
-	case "user_roles":
-		return h.insertUserRole(c, values)
-	case "rooms":
-		return h.insertRoom(c, values)
-	case "guest_stays":
-		return h.insertGuestStay(c, values)
-	case "complaints":
-		return h.insertComplaint(c, values)
-	case "menu_categories":
-		return h.insertMenuCategory(c, values)
-	case "menu_items":
-		return h.insertMenuItem(c, values, mutationSingle(payload.Single))
-	case "menu_item_customizations":
-		return h.insertMenuCustomizations(c, valueMaps(payload.Values))
-	case "inventory_items":
-		return h.insertInventoryItem(c, values)
-	case "guest_preferences":
-		return h.insertGuestPreferences(c, values, mutationSingle(payload.Single))
-	case "orders":
-		return h.insertOrder(c, values, mutationSingle(payload.Single))
-	case "order_items":
-		return h.insertOrderItems(c, valueMaps(payload.Values))
-	case "payments":
-		return h.insertPayment(c, values)
-	case "payment_settings":
-		return h.insertPaymentSetting(c, values)
-	case "staff_shifts":
-		return h.insertStaffShift(c, values)
-	case "housekeeping_assignments":
-		return h.insertHousekeepingAssignment(c, values)
-	case "work_orders":
-		return h.insertWorkOrder(c, values)
-	default:
-		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility insert table: %s", table))
-	}
+	return h.withCompatAudit(c, "CREATE", table, asString(values["id"]), map[string]interface{}{"values": payload.Values}, func() error {
+		switch table {
+		case "profiles":
+			return h.insertProfile(c, values, mutationSingle(payload.Single))
+		case "user_roles":
+			return h.insertUserRole(c, values)
+		case "rooms":
+			return h.insertRoom(c, values)
+		case "guest_stays":
+			return h.insertGuestStay(c, values)
+		case "complaints":
+			return h.insertComplaint(c, values)
+		case "menu_categories":
+			return h.insertMenuCategory(c, values)
+		case "menu_items":
+			return h.insertMenuItem(c, values, mutationSingle(payload.Single))
+		case "menu_item_customizations":
+			return h.insertMenuCustomizations(c, valueMaps(payload.Values))
+		case "inventory_items":
+			return h.insertInventoryItem(c, values)
+		case "guest_preferences":
+			return h.insertGuestPreferences(c, values, mutationSingle(payload.Single))
+		case "orders":
+			return h.insertOrder(c, values, mutationSingle(payload.Single))
+		case "order_items":
+			return h.insertOrderItems(c, valueMaps(payload.Values))
+		case "payments":
+			return h.insertPayment(c, values)
+		case "payment_settings":
+			return h.insertPaymentSetting(c, values)
+		case "staff_shifts":
+			return h.insertStaffShift(c, values)
+		case "housekeeping_assignments":
+			return h.insertHousekeepingAssignment(c, values)
+		case "work_orders":
+			return h.insertWorkOrder(c, values)
+		default:
+			return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility insert table: %s", table))
+		}
+	})
 }
 
 func (h *CompatHandler) Update(c *fiber.Ctx) error {
-	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
-		return err
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
 	}
 
 	table := c.Params("table")
@@ -176,47 +178,53 @@ func (h *CompatHandler) Update(c *fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "id filter is required")
 	}
 
-	switch table {
-	case "profiles":
-		userID, _ := stringFilter(payload.Filters, "user_id")
-		return h.updateProfile(c, id, userID, values)
-	case "rooms":
-		return h.updateRoom(c, id, values)
-	case "guest_stays":
-		return h.updateGuestStay(c, id, values)
-	case "complaints":
-		return h.updateComplaint(c, id, values)
-	case "menu_categories":
-		return h.updateMenuCategory(c, id, values)
-	case "menu_items":
-		return h.updateMenuItem(c, id, values)
-	case "menu_item_customizations":
-		return h.updateMenuCustomization(c, id, values)
-	case "inventory_items":
-		return h.updateInventoryItem(c, id, values)
-	case "guest_preferences":
-		userID, _ := stringFilter(payload.Filters, "user_id")
-		return h.updateGuestPreferences(c, id, userID, values)
-	case "orders":
-		return h.updateOrder(c, id, values)
-	case "payments":
-		return h.updatePayment(c, id, values)
-	case "payment_settings":
-		return h.updatePaymentSetting(c, id, values)
-	case "staff_shifts":
-		return h.updateStaffShift(c, id, values)
-	case "housekeeping_assignments":
-		return h.updateHousekeepingAssignment(c, id, values)
-	case "work_orders":
-		return h.updateWorkOrder(c, id, values)
-	default:
-		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility update table: %s", table))
+	recordID := id
+	if recordID == "" {
+		recordID, _ = stringFilter(payload.Filters, "user_id")
 	}
+	return h.withCompatAudit(c, "UPDATE", table, recordID, map[string]interface{}{"filters": payload.Filters, "values": values}, func() error {
+		switch table {
+		case "profiles":
+			userID, _ := stringFilter(payload.Filters, "user_id")
+			return h.updateProfile(c, id, userID, values)
+		case "rooms":
+			return h.updateRoom(c, id, values)
+		case "guest_stays":
+			return h.updateGuestStay(c, id, values)
+		case "complaints":
+			return h.updateComplaint(c, id, values)
+		case "menu_categories":
+			return h.updateMenuCategory(c, id, values)
+		case "menu_items":
+			return h.updateMenuItem(c, id, values)
+		case "menu_item_customizations":
+			return h.updateMenuCustomization(c, id, values)
+		case "inventory_items":
+			return h.updateInventoryItem(c, id, values)
+		case "guest_preferences":
+			userID, _ := stringFilter(payload.Filters, "user_id")
+			return h.updateGuestPreferences(c, id, userID, values)
+		case "orders":
+			return h.updateOrder(c, id, values)
+		case "payments":
+			return h.updatePayment(c, id, values)
+		case "payment_settings":
+			return h.updatePaymentSetting(c, id, values)
+		case "staff_shifts":
+			return h.updateStaffShift(c, id, values)
+		case "housekeeping_assignments":
+			return h.updateHousekeepingAssignment(c, id, values)
+		case "work_orders":
+			return h.updateWorkOrder(c, id, values)
+		default:
+			return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility update table: %s", table))
+		}
+	})
 }
 
 func (h *CompatHandler) Delete(c *fiber.Ctx) error {
-	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
-		return err
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
 	}
 
 	table := c.Params("table")
@@ -226,54 +234,152 @@ func (h *CompatHandler) Delete(c *fiber.Ctx) error {
 	}
 	id, _ := stringFilter(payload.Filters, "id")
 
-	switch table {
-	case "rooms":
-		if id == "" {
-			return response.Error(c, fiber.StatusBadRequest, "id filter is required")
-		}
-		if _, err := h.pool.Exec(c.Context(), `DELETE FROM rooms WHERE id = $1`, id); err != nil {
-			return response.Error(c, fiber.StatusBadRequest, err.Error())
-		}
-		return response.OK(c, []map[string]interface{}{})
-	case "guest_stays":
-		if id == "" {
-			return response.Error(c, fiber.StatusBadRequest, "id filter is required")
-		}
-		if _, err := h.pool.Exec(c.Context(), `DELETE FROM guest_stays WHERE id = $1`, id); err != nil {
-			return response.Error(c, fiber.StatusBadRequest, err.Error())
-		}
-		return response.OK(c, []map[string]interface{}{})
-	case "profiles", "complaints", "menu_categories", "menu_items", "inventory_items", "guest_preferences", "orders", "payments", "payment_settings", "staff_shifts", "housekeeping_assignments", "work_orders":
-		if id == "" {
-			return response.Error(c, fiber.StatusBadRequest, "id filter is required")
-		}
-		if _, err := h.pool.Exec(c.Context(), fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, table), id); err != nil {
-			return response.Error(c, fiber.StatusBadRequest, err.Error())
-		}
-		return response.OK(c, []map[string]interface{}{})
-	case "menu_item_customizations":
-		return h.deleteByIDOrColumn(c, table, id, payload.Filters, "menu_item_id")
-	case "order_items":
-		return h.deleteByIDOrColumn(c, table, id, payload.Filters, "order_id")
-	case "user_roles":
-		if id != "" {
-			if _, err := h.pool.Exec(c.Context(), `DELETE FROM user_roles WHERE id = $1`, id); err != nil {
+	recordID := id
+	if recordID == "" {
+		recordID, _ = stringFilter(payload.Filters, "user_id")
+	}
+	return h.withCompatAudit(c, "DELETE", table, recordID, map[string]interface{}{"filters": payload.Filters}, func() error {
+		switch table {
+		case "rooms":
+			if id == "" {
+				return response.Error(c, fiber.StatusBadRequest, "id filter is required")
+			}
+			if _, err := h.pool.Exec(c.Context(), `DELETE FROM rooms WHERE id = $1`, id); err != nil {
 				return response.Error(c, fiber.StatusBadRequest, err.Error())
 			}
 			return response.OK(c, []map[string]interface{}{})
+		case "guest_stays":
+			if id == "" {
+				return response.Error(c, fiber.StatusBadRequest, "id filter is required")
+			}
+			if _, err := h.pool.Exec(c.Context(), `DELETE FROM guest_stays WHERE id = $1`, id); err != nil {
+				return response.Error(c, fiber.StatusBadRequest, err.Error())
+			}
+			return response.OK(c, []map[string]interface{}{})
+		case "profiles", "complaints", "menu_categories", "menu_items", "inventory_items", "guest_preferences", "orders", "payments", "payment_settings", "staff_shifts", "housekeeping_assignments", "work_orders":
+			if id == "" {
+				return response.Error(c, fiber.StatusBadRequest, "id filter is required")
+			}
+			if _, err := h.pool.Exec(c.Context(), fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, table), id); err != nil {
+				return response.Error(c, fiber.StatusBadRequest, err.Error())
+			}
+			return response.OK(c, []map[string]interface{}{})
+		case "menu_item_customizations":
+			return h.deleteByIDOrColumn(c, table, id, payload.Filters, "menu_item_id")
+		case "order_items":
+			return h.deleteByIDOrColumn(c, table, id, payload.Filters, "order_id")
+		case "user_roles":
+			if id != "" {
+				if _, err := h.pool.Exec(c.Context(), `DELETE FROM user_roles WHERE id = $1`, id); err != nil {
+					return response.Error(c, fiber.StatusBadRequest, err.Error())
+				}
+				return response.OK(c, []map[string]interface{}{})
+			}
+			userID, _ := stringFilter(payload.Filters, "user_id")
+			role, _ := stringFilter(payload.Filters, "role")
+			if userID == "" || role == "" {
+				return response.Error(c, fiber.StatusBadRequest, "id or user_id+role filters are required")
+			}
+			if _, err := h.pool.Exec(c.Context(), `DELETE FROM user_roles WHERE user_id = $1 AND role = $2`, userID, role); err != nil {
+				return response.Error(c, fiber.StatusBadRequest, err.Error())
+			}
+			return response.OK(c, []map[string]interface{}{})
+		default:
+			return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility delete table: %s", table))
 		}
-		userID, _ := stringFilter(payload.Filters, "user_id")
-		role, _ := stringFilter(payload.Filters, "role")
-		if userID == "" || role == "" {
-			return response.Error(c, fiber.StatusBadRequest, "id or user_id+role filters are required")
-		}
-		if _, err := h.pool.Exec(c.Context(), `DELETE FROM user_roles WHERE user_id = $1 AND role = $2`, userID, role); err != nil {
-			return response.Error(c, fiber.StatusBadRequest, err.Error())
-		}
-		return response.OK(c, []map[string]interface{}{})
-	default:
-		return response.Error(c, fiber.StatusNotFound, fmt.Sprintf("unsupported compatibility delete table: %s", table))
+	})
+}
+
+func (h *CompatHandler) withCompatAudit(c *fiber.Ctx, action, table, recordIDHint string, details map[string]interface{}, run func() error) error {
+	err := run()
+	if err != nil {
+		return err
 	}
+	status := c.Response().StatusCode()
+	if status < fiber.StatusOK || status >= fiber.StatusMultipleChoices {
+		return nil
+	}
+
+	recordIDs := compatRecordIDsFromResponse(c.Response().Body())
+	if len(recordIDs) == 0 && recordIDHint != "" {
+		recordIDs = []string{recordIDHint}
+	}
+	if len(recordIDs) == 0 {
+		recordIDs = []string{""}
+	}
+
+	for _, recordID := range recordIDs {
+		if err := h.auditCompatMutation(c, action, table, recordID, details); err != nil {
+			return response.Error(c, fiber.StatusInternalServerError, fmt.Sprintf("audit log failed: %s", err.Error()))
+		}
+	}
+	return nil
+}
+
+func (h *CompatHandler) auditCompatMutation(c *fiber.Ctx, action, table, recordID string, details map[string]interface{}) error {
+	claims, err := jwtClaimsFromRequest(c, h.secretKey)
+	if err != nil {
+		return err
+	}
+
+	hotelID := postgres.DemoHotelID
+	if rawHotelID, ok := claims["hotel_id"].(string); ok && strings.TrimSpace(rawHotelID) != "" {
+		if parsed, err := uuid.Parse(rawHotelID); err == nil {
+			hotelID = parsed
+		}
+	}
+
+	var userID *uuid.UUID
+	if rawUserID, ok := claims["sub"].(string); ok && strings.TrimSpace(rawUserID) != "" {
+		if parsed, err := uuid.Parse(rawUserID); err == nil {
+			userID = &parsed
+		}
+	}
+
+	var recordUUID *uuid.UUID
+	if strings.TrimSpace(recordID) != "" {
+		if parsed, err := uuid.Parse(recordID); err == nil {
+			recordUUID = &parsed
+		}
+	}
+
+	payload, _ := json.Marshal(details)
+	_, err = h.pool.Exec(c.Context(), `
+		INSERT INTO audit_logs (
+			id, hotel_id, user_id, action, table_name, record_id, resource_type, resource_id,
+			new_data, user_agent, ai_triggered, created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false,now())`,
+		uuid.New(), hotelID, userID, action, table, recordUUID, table, recordUUID, payload, c.Get("User-Agent"),
+	)
+	return err
+}
+
+func compatRecordIDsFromResponse(body []byte) []string {
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if len(body) == 0 || json.Unmarshal(body, &envelope) != nil || len(envelope.Data) == 0 {
+		return nil
+	}
+
+	var object map[string]interface{}
+	if json.Unmarshal(envelope.Data, &object) == nil {
+		if id, ok := object["id"].(string); ok && id != "" {
+			return []string{id}
+		}
+	}
+
+	var objects []map[string]interface{}
+	if json.Unmarshal(envelope.Data, &objects) != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(objects))
+	for _, item := range objects {
+		if id, ok := item["id"].(string); ok && id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func mutationSingle(v interface{}) string {

@@ -59,8 +59,8 @@ type bookingCheckoutRequest struct {
 }
 
 func (h *PaymentHandler) BookingCheckout(c *fiber.Ctx) error {
-	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
-		return err
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
 	}
 
 	var req bookingCheckoutRequest
@@ -108,8 +108,8 @@ type paymentCheckoutRequest struct {
 }
 
 func (h *PaymentHandler) PaymentCheckout(c *fiber.Ctx) error {
-	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
-		return err
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
 	}
 
 	var req paymentCheckoutRequest
@@ -133,8 +133,8 @@ type completePaymentRequest struct {
 }
 
 func (h *PaymentHandler) CompletePayment(c *fiber.Ctx) error {
-	if err := requireAuthenticatedRequest(c, h.secretKey); err != nil {
-		return err
+	if !requireAuthenticatedRequest(c, h.secretKey) {
+		return nil
 	}
 
 	var req completePaymentRequest

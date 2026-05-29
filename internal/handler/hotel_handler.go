@@ -166,8 +166,8 @@ type updateBrandingRequest struct {
 }
 
 func (h *HotelHandler) UpdateBranding(c *fiber.Ctx) error {
-	if err := requireAnyRoleFromToken(c, h.secretKey, "platform_admin", "hotel_admin", "super_admin"); err != nil {
-		return err
+	if !requireAnyRoleFromToken(c, h.secretKey, "platform_admin", "hotel_admin", "super_admin") {
+		return nil
 	}
 
 	var req updateBrandingRequest
