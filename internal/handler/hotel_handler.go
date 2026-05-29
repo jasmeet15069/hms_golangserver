@@ -120,6 +120,7 @@ func (h *HotelHandler) CreateHotel(c *fiber.Ctx) error {
 		PrimaryColor:   deref(defaultStringPtr(req.PrimaryColor, "#000000")),
 		WelcomeMessage: req.WelcomeMessage,
 		FooterText:     req.FooterText,
+		HotelName:      req.Name,
 	})
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())
@@ -159,6 +160,7 @@ func (h *HotelHandler) Branding(c *fiber.Ctx) error {
 
 type updateBrandingRequest struct {
 	HotelID        string  `json:"hotel_id"`
+	HotelName      string  `json:"hotel_name"`
 	LogoURL        *string `json:"logo_url"`
 	PrimaryColor   string  `json:"primary_color"`
 	WelcomeMessage *string `json:"welcome_message"`
@@ -192,6 +194,7 @@ func (h *HotelHandler) UpdateBranding(c *fiber.Ctx) error {
 		PrimaryColor:   color,
 		WelcomeMessage: req.WelcomeMessage,
 		FooterText:     req.FooterText,
+		HotelName:      strings.TrimSpace(req.HotelName),
 	})
 	if err != nil {
 		return response.Error(c, fiber.StatusBadRequest, err.Error())

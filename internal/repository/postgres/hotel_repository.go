@@ -85,6 +85,18 @@ func (r *hotelRepository) CreateProperty(ctx context.Context, property *domain.P
 }
 
 func (r *hotelRepository) UpsertBranding(ctx context.Context, branding *domain.HotelBranding) (*domain.HotelBranding, error) {
+	tx, err := r.db.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	if strings.TrimSpace(branding.HotelName) != "" {
+		if _, err := tx.Exec(ctx, `UPDATE hotels SET name = $1, updated_at = now() WHERE id = $2`, strings.TrimSpace(branding.HotelName), branding.HotelID); err != nil {
+			return nil, err
+		}
+	}
+
 	const q = `
 		INSERT INTO hotel_branding (hotel_id, logo_url, primary_color, welcome_message, footer_text, updated_at)
 		VALUES ($1,$2,$3,$4,$5,now())
@@ -93,10 +105,14 @@ func (r *hotelRepository) UpsertBranding(ctx context.Context, branding *domain.H
 		      primary_color = EXCLUDED.primary_color,
 		      welcome_message = EXCLUDED.welcome_message,
 		      footer_text = EXCLUDED.footer_text,
-		      updated_at = now()
-		RETURNING hotel_id, logo_url, primary_color, welcome_message, footer_text, updated_at`
-	row := r.db.Pool.QueryRow(ctx, q, branding.HotelID, branding.LogoURL, branding.PrimaryColor, branding.WelcomeMessage, branding.FooterText)
-	return scanBranding(row)
+		      updated_at = now()`
+	if _, err := tx.Exec(ctx, q, branding.HotelID, branding.LogoURL, branding.PrimaryColor, branding.WelcomeMessage, branding.FooterText); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return r.FindBrandingByHotelID(ctx, branding.HotelID)
 }
 
 func (r *hotelRepository) FindBrandingBySlug(ctx context.Context, slug string) (*domain.HotelBranding, error) {
