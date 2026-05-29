@@ -1,11 +1,14 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -54,10 +57,33 @@ type CheckoutResult struct {
 	PaymentID   uuid.UUID `json:"payment_id,omitempty"`
 }
 
+// RazorpayOrderResult is returned to the frontend before opening Razorpay Checkout.
+type RazorpayOrderResult struct {
+	OrderID     string    `json:"order_id"`
+	KeyID       string    `json:"key_id"`
+	PaymentID   uuid.UUID `json:"payment_id"`
+	StayID      uuid.UUID `json:"stay_id"`
+	Amount      int64     `json:"amount"`
+	Currency    string    `json:"currency"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+}
+
+// RazorpayVerifyRequest contains the signed Checkout response from Razorpay.
+type RazorpayVerifyRequest struct {
+	PaymentID         uuid.UUID `json:"payment_id"`
+	RazorpayOrderID   string    `json:"razorpay_order_id"`
+	RazorpayPaymentID string    `json:"razorpay_payment_id"`
+	RazorpaySignature string    `json:"razorpay_signature"`
+}
+
 // PaymentService orchestrates Stripe checkout and payment completion.
 type PaymentService interface {
 	BookingCheckout(ctx context.Context, req BookingCheckoutRequest) (*CheckoutResult, error)
 	HoldBooking(ctx context.Context, req BookingCheckoutRequest) (*CheckoutResult, error)
+	CreateRazorpayBookingOrder(ctx context.Context, req BookingCheckoutRequest) (*RazorpayOrderResult, error)
+	CreateRazorpayPaymentOrder(ctx context.Context, paymentID uuid.UUID, currency, country string) (*RazorpayOrderResult, error)
+	VerifyRazorpayPayment(ctx context.Context, req RazorpayVerifyRequest) error
 	PaymentCheckout(ctx context.Context, paymentID uuid.UUID, currency, country, originURL string) (*CheckoutResult, error)
 	CompletePayment(ctx context.Context, paymentID uuid.UUID, sessionID string) error
 	GetConfig(ctx context.Context) map[string]interface{}
@@ -268,6 +294,125 @@ func (s *paymentService) BookingCheckout(ctx context.Context, req BookingCheckou
 	}, nil
 }
 
+// CreateRazorpayBookingOrder creates the booking/payment records, then creates
+// a Razorpay Order. The booking is only confirmed paid after signature verify.
+func (s *paymentService) CreateRazorpayBookingOrder(ctx context.Context, req BookingCheckoutRequest) (*RazorpayOrderResult, error) {
+	gatewayCfg, keyID, keySecret, err := s.razorpayCredentials(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	allocationKey, err := bookingRoomLockKey(req)
+	if err != nil {
+		return nil, err
+	}
+	lockKey := fmt.Sprintf("lock:razorpay-booking:%s:%s:%s:%s", req.UserID, allocationKey, req.CheckInDate.Format("2006-01-02"), req.CheckOutDate.Format("2006-01-02"))
+	locked, err := s.cache.SetNX(ctx, lockKey, "1", cache.TTLLock)
+	if err != nil {
+		s.log.Warn("razorpay booking lock unavailable", zap.Error(err))
+	} else if !locked {
+		return nil, fmt.Errorf("booking is already being processed")
+	} else {
+		defer func() { _ = s.cache.Delete(context.Background(), lockKey) }()
+	}
+
+	currency := strings.ToUpper(strings.TrimSpace(req.Currency))
+	if currency == "" {
+		currency = strings.ToUpper(strings.TrimSpace(gatewayCfg.DefaultCurrency))
+	}
+	if currency == "" {
+		currency = "INR"
+	}
+	if currency != "INR" {
+		return nil, fmt.Errorf("Razorpay checkout is configured for INR. Select India (INR) before paying online")
+	}
+
+	room, err := s.resolveBookingRoom(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	nights := bookingNights(req.CheckInDate, req.CheckOutDate)
+	usdAmount := room.PricePerNight * float64(nights)
+	rate, err := s.GetExchangeRate(ctx, "USD", currency)
+	if err != nil {
+		return nil, fmt.Errorf("unable to price booking in %s: %w", currency, err)
+	}
+	convertedAmount := roundTo2(usdAmount * rate)
+	minorAmount := razorpayMinorAmount(convertedAmount)
+
+	guestName := strings.TrimSpace(req.GuestName)
+	if guestName == "" {
+		guestName = "Guest"
+	}
+	guestEmail := &req.GuestEmail
+	guestPhone := &req.GuestPhone
+	roomType := roomTypeLabel(room.RoomType)
+	stayNotes := fmt.Sprintf("Razorpay checkout pending. Country: %s. Currency: %s. Rate: %.6f. Room number assigned after booking.", req.Country, currency, rate)
+
+	stay, err := s.roomRepo.CreateStay(ctx, &domain.GuestStay{
+		GuestID:      &req.UserID,
+		RoomID:       room.ID,
+		GuestName:    guestName,
+		GuestEmail:   guestEmail,
+		GuestPhone:   guestPhone,
+		CheckInDate:  req.CheckInDate,
+		CheckOutDate: req.CheckOutDate,
+		TotalAmount:  &usdAmount,
+		Notes:        &stayNotes,
+		CreatedBy:    &req.UserID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create stay: %w", err)
+	}
+
+	payNum := fmt.Sprintf("PAY-%s-%s", time.Now().Format("150405"), strings.ToUpper(stay.ID.String()[:6]))
+	payNotes := fmt.Sprintf("Razorpay checkout pending. %s room booking for %d night(s) in %s. Assigned room: %s", roomType, nights, currency, room.RoomNumber)
+	payment, err := s.paymentRepo.Create(ctx, &domain.Payment{
+		PaymentNumber: payNum,
+		GuestStayID:   &stay.ID,
+		Amount:        convertedAmount,
+		PaymentMethod: "razorpay",
+		Status:        domain.PaymentStatusPending,
+		ProcessedBy:   &req.UserID,
+		Notes:         &payNotes,
+	})
+	if err != nil {
+		_ = s.roomRepo.DeleteStay(ctx, stay.ID)
+		return nil, fmt.Errorf("create payment: %w", err)
+	}
+
+	_ = s.roomRepo.UpdateRoomStatus(ctx, room.ID, domain.RoomStatusOccupied)
+	_ = s.cache.Delete(ctx, cache.KeyDashboardStats(), cache.KeyRoomList("all"), cache.KeyRoomList(string(domain.RoomStatusAvailable)), cache.KeyRoomList(string(domain.RoomStatusOccupied)))
+
+	description := fmt.Sprintf("%s room - %d night(s). Room number assigned after booking.", roomType, nights)
+	orderID, err := s.createRazorpayOrder(ctx, keyID, keySecret, minorAmount, currency, payment.ID.String(), map[string]string{
+		"payment_id": payment.ID.String(),
+		"stay_id":    stay.ID.String(),
+		"room_id":    room.ID.String(),
+		"guest_id":   req.UserID.String(),
+	})
+	if err != nil {
+		_ = s.paymentRepo.Delete(ctx, payment.ID)
+		_ = s.roomRepo.DeleteStay(ctx, stay.ID)
+		_ = s.roomRepo.UpdateRoomStatus(ctx, room.ID, domain.RoomStatusAvailable)
+		return nil, fmt.Errorf("Razorpay order failed: %w", err)
+	}
+
+	payNotes = fmt.Sprintf("%s. Razorpay order: %s", payNotes, orderID)
+	_ = s.paymentRepo.UpdateAmountAndNotes(ctx, payment.ID, convertedAmount, "razorpay", payNotes)
+
+	return &RazorpayOrderResult{
+		OrderID:     orderID,
+		KeyID:       keyID,
+		PaymentID:   payment.ID,
+		StayID:      stay.ID,
+		Amount:      minorAmount,
+		Currency:    currency,
+		Name:        "Hotel Room Booking",
+		Description: description,
+	}, nil
+}
+
 // HoldBooking creates a pending booking without exposing a physical room before the hold exists.
 func (s *paymentService) HoldBooking(ctx context.Context, req BookingCheckoutRequest) (*CheckoutResult, error) {
 	allocationKey, err := bookingRoomLockKey(req)
@@ -339,6 +484,89 @@ func (s *paymentService) HoldBooking(ctx context.Context, req BookingCheckoutReq
 	return &CheckoutResult{
 		StayID:    stay.ID,
 		PaymentID: payment.ID,
+	}, nil
+}
+
+// CreateRazorpayPaymentOrder creates a Razorpay Order for an existing pending payment.
+func (s *paymentService) CreateRazorpayPaymentOrder(ctx context.Context, paymentID uuid.UUID, currency, country string) (*RazorpayOrderResult, error) {
+	gatewayCfg, keyID, keySecret, err := s.razorpayCredentials(ctx)
+	if err != nil {
+		return nil, err
+	}
+	lockKey := "lock:razorpay-payment:" + paymentID.String()
+	locked, err := s.cache.SetNX(ctx, lockKey, "1", cache.TTLLock)
+	if err != nil {
+		s.log.Warn("razorpay payment lock unavailable", zap.Error(err))
+	} else if !locked {
+		return nil, fmt.Errorf("payment checkout is already being processed")
+	} else {
+		defer func() { _ = s.cache.Delete(context.Background(), lockKey) }()
+	}
+
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	if currency == "" {
+		currency = strings.ToUpper(strings.TrimSpace(gatewayCfg.DefaultCurrency))
+	}
+	if currency == "" {
+		currency = "INR"
+	}
+	if currency != "INR" {
+		return nil, fmt.Errorf("Razorpay checkout is configured for INR. Select India (INR) before paying online")
+	}
+
+	payment, err := s.paymentRepo.FindByID(ctx, paymentID)
+	if err != nil {
+		return nil, fmt.Errorf("payment not found")
+	}
+	if payment.Status == domain.PaymentStatusCompleted {
+		return nil, fmt.Errorf("payment is already completed")
+	}
+
+	stayID := uuid.Nil
+	usdAmount := payment.Amount
+	description := "Hotel payment"
+	if payment.GuestStayID != nil {
+		stayID = *payment.GuestStayID
+		stay, err := s.roomRepo.FindStayByID(ctx, *payment.GuestStayID)
+		if err != nil {
+			return nil, fmt.Errorf("booking not found")
+		}
+		if stay.TotalAmount != nil {
+			usdAmount = *stay.TotalAmount
+		}
+		roomNumber := ""
+		if stay.Room != nil {
+			roomNumber = stay.Room.RoomNumber
+		}
+		description = fmt.Sprintf("Room %s booking payment", roomNumber)
+	}
+
+	rate, err := s.GetExchangeRate(ctx, "USD", currency)
+	if err != nil {
+		return nil, fmt.Errorf("unable to price payment in %s: %w", currency, err)
+	}
+	convertedAmount := roundTo2(usdAmount * rate)
+	minorAmount := razorpayMinorAmount(convertedAmount)
+	orderID, err := s.createRazorpayOrder(ctx, keyID, keySecret, minorAmount, currency, paymentID.String(), map[string]string{
+		"payment_id": paymentID.String(),
+		"stay_id":    stayID.String(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("Razorpay order failed: %w", err)
+	}
+
+	notes := fmt.Sprintf("Razorpay checkout pending. Country: %s. Currency: %s. Rate: %.6f. Razorpay order: %s", country, currency, rate, orderID)
+	_ = s.paymentRepo.UpdateAmountAndNotes(ctx, paymentID, convertedAmount, "razorpay", notes)
+
+	return &RazorpayOrderResult{
+		OrderID:     orderID,
+		KeyID:       keyID,
+		PaymentID:   paymentID,
+		StayID:      stayID,
+		Amount:      minorAmount,
+		Currency:    currency,
+		Name:        "Hotel Payment",
+		Description: description,
 	}, nil
 }
 
@@ -468,12 +696,52 @@ func (s *paymentService) CompletePayment(ctx context.Context, paymentID uuid.UUI
 	return nil
 }
 
+// VerifyRazorpayPayment verifies Razorpay's signed Checkout response server-side.
+func (s *paymentService) VerifyRazorpayPayment(ctx context.Context, req RazorpayVerifyRequest) error {
+	_, keyID, keySecret, err := s.razorpayCredentials(ctx)
+	if err != nil {
+		return err
+	}
+	if req.PaymentID == uuid.Nil || strings.TrimSpace(req.RazorpayOrderID) == "" || strings.TrimSpace(req.RazorpayPaymentID) == "" || strings.TrimSpace(req.RazorpaySignature) == "" {
+		return fmt.Errorf("Razorpay payment verification data is incomplete")
+	}
+
+	payment, err := s.paymentRepo.FindByID(ctx, req.PaymentID)
+	if err != nil {
+		return fmt.Errorf("payment not found")
+	}
+	if payment.Status == domain.PaymentStatusCompleted {
+		return nil
+	}
+	if payment.Notes == nil || !strings.Contains(*payment.Notes, req.RazorpayOrderID) {
+		return fmt.Errorf("Razorpay order does not match this payment")
+	}
+
+	message := req.RazorpayOrderID + "|" + req.RazorpayPaymentID
+	mac := hmac.New(sha256.New, []byte(keySecret))
+	_, _ = mac.Write([]byte(message))
+	expected := hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(strings.ToLower(expected)), []byte(strings.ToLower(req.RazorpaySignature))) {
+		return fmt.Errorf("Razorpay payment signature is invalid")
+	}
+
+	if err := s.verifyRazorpayPaymentCapture(ctx, keyID, keySecret, req, payment); err != nil {
+		return err
+	}
+	if err := s.paymentRepo.UpdateStatus(ctx, req.PaymentID, domain.PaymentStatusCompleted, "razorpay"); err != nil {
+		return err
+	}
+	_ = s.cache.Delete(ctx, cache.KeyDashboardStats())
+	return nil
+}
+
 // GetConfig returns payment gateway configuration for the frontend.
 func (s *paymentService) GetConfig(ctx context.Context) map[string]interface{} {
 	secret := s.cfg.Stripe.SecretKey
 	pub := s.cfg.Stripe.PublishableKey
 	activeGateway := "stripe"
 	razorpayConfigured := false
+	razorpayKeyID := ""
 	defaultCurrency := "USD"
 	gatewayMode := ""
 	if gatewayCfg, err := s.paymentRepo.FindGatewayConfig(ctx); err == nil {
@@ -491,6 +759,9 @@ func (s *paymentService) GetConfig(ctx context.Context) map[string]interface{} {
 			strings.TrimSpace(*gatewayCfg.RazorpayKeyID) != "" &&
 			gatewayCfg.RazorpayKeySecretEncrypted != nil &&
 			strings.TrimSpace(*gatewayCfg.RazorpayKeySecretEncrypted) != ""
+		if gatewayCfg.RazorpayKeyID != nil {
+			razorpayKeyID = strings.TrimSpace(*gatewayCfg.RazorpayKeyID)
+		}
 	}
 	configured := strings.HasPrefix(secret, "sk_")
 	mode := ""
@@ -514,6 +785,7 @@ func (s *paymentService) GetConfig(ctx context.Context) map[string]interface{} {
 		"publishable_mode":    pubMode,
 		"mode_matches":        mode != "" && pubMode != "" && mode == pubMode,
 		"razorpay_configured": razorpayConfigured,
+		"razorpay_key_id":     razorpayKeyID,
 	}
 }
 
@@ -573,6 +845,87 @@ type stripeSessionParams struct {
 type stripeSession struct {
 	ID  string `json:"id"`
 	URL string `json:"url"`
+}
+
+func (s *paymentService) createRazorpayOrder(ctx context.Context, keyID, keySecret string, amount int64, currency, receipt string, notes map[string]string) (string, error) {
+	payload := map[string]interface{}{
+		"amount":   amount,
+		"currency": currency,
+		"receipt":  receipt,
+		"notes":    notes,
+	}
+	body, _ := json.Marshal(payload)
+
+	reqCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(reqCtx, http.MethodPost, "https://api.razorpay.com/v1/orders", bytes.NewReader(body))
+	req.SetBasicAuth(keyID, keySecret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "HotelOps/2.0")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("razorpay error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		ID       string `json:"id"`
+		Amount   int64  `json:"amount"`
+		Currency string `json:"currency"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil || strings.TrimSpace(result.ID) == "" {
+		return "", fmt.Errorf("razorpay: invalid order response")
+	}
+	if result.Amount != amount || strings.ToUpper(result.Currency) != currency {
+		return "", fmt.Errorf("razorpay: order amount or currency mismatch")
+	}
+	return result.ID, nil
+}
+
+func (s *paymentService) verifyRazorpayPaymentCapture(ctx context.Context, keyID, keySecret string, req RazorpayVerifyRequest, payment *domain.Payment) error {
+	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	httpReq, _ := http.NewRequestWithContext(reqCtx, http.MethodGet,
+		fmt.Sprintf("https://api.razorpay.com/v1/payments/%s", req.RazorpayPaymentID), nil)
+	httpReq.SetBasicAuth(keyID, keySecret)
+	httpReq.Header.Set("User-Agent", "HotelOps/2.0")
+
+	resp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("unable to verify Razorpay payment status: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Razorpay payment status check failed: %s", string(body))
+	}
+
+	var result struct {
+		ID       string `json:"id"`
+		OrderID  string `json:"order_id"`
+		Status   string `json:"status"`
+		Amount   int64  `json:"amount"`
+		Currency string `json:"currency"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("Razorpay payment status response was invalid")
+	}
+	if result.OrderID != req.RazorpayOrderID || result.ID != req.RazorpayPaymentID {
+		return fmt.Errorf("Razorpay payment does not match the verified order")
+	}
+	if result.Status != "captured" {
+		return fmt.Errorf("Razorpay payment is %s, not captured yet", result.Status)
+	}
+	expectedAmount := razorpayMinorAmount(payment.Amount)
+	if result.Amount != expectedAmount || strings.ToUpper(result.Currency) != "INR" {
+		return fmt.Errorf("Razorpay payment amount or currency mismatch")
+	}
+	return nil
 }
 
 func (s *paymentService) createStripeSession(ctx context.Context, p stripeSessionParams) (*stripeSession, error) {
@@ -677,6 +1030,45 @@ func (s *paymentService) stripeSecretKey(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("Stripe secret key is not configured")
 }
 
+func (s *paymentService) razorpayCredentials(ctx context.Context) (*domain.PaymentGatewayConfig, string, string, error) {
+	gatewayCfg, err := s.paymentRepo.FindGatewayConfig(ctx)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("Razorpay gateway is not configured")
+	}
+	if gatewayCfg.ActiveGateway != "razorpay" {
+		return nil, "", "", fmt.Errorf("%s is the active payment gateway; Razorpay checkout is not enabled", gatewayCfg.ActiveGateway)
+	}
+	if !gatewayCfg.RazorpayEnabled {
+		return nil, "", "", fmt.Errorf("Razorpay is disabled in payment settings")
+	}
+	keyID := ""
+	if gatewayCfg.RazorpayKeyID != nil {
+		keyID = strings.TrimSpace(*gatewayCfg.RazorpayKeyID)
+	}
+	keySecret, err := s.decryptSetting(gatewayCfg.RazorpayKeySecretEncrypted)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("Razorpay secret could not be decrypted")
+	}
+	if keyID == "" || keySecret == "" {
+		return nil, "", "", fmt.Errorf("Razorpay key id and secret are required")
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(gatewayCfg.GatewayMode))
+	switch mode {
+	case "", "test":
+		if !strings.HasPrefix(keyID, "rzp_test_") {
+			return nil, "", "", fmt.Errorf("Razorpay test mode requires an rzp_test key id")
+		}
+	case "live":
+		if !strings.HasPrefix(keyID, "rzp_live_") {
+			return nil, "", "", fmt.Errorf("Razorpay live mode requires an rzp_live key id")
+		}
+	default:
+		return nil, "", "", fmt.Errorf("Razorpay gateway mode must be test or live")
+	}
+	return gatewayCfg, keyID, keySecret, nil
+}
+
 func (s *paymentService) decryptSetting(value *string) (string, error) {
 	if value == nil || strings.TrimSpace(*value) == "" {
 		return "", nil
@@ -722,6 +1114,14 @@ func stripeMinorAmount(amount float64, currency string) int64 {
 		return v
 	}
 	v := int64(amount * 100)
+	if v < 1 {
+		return 1
+	}
+	return v
+}
+
+func razorpayMinorAmount(amount float64) int64 {
+	v := int64(amount*100 + 0.5)
 	if v < 1 {
 		return 1
 	}
