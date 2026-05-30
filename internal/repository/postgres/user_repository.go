@@ -25,6 +25,7 @@ type UserRepository interface {
 	Create(ctx context.Context, email, passwordHash string) (*domain.User, error)
 	FindByEmail(ctx context.Context, email string) (*domain.User, error)
 	FindByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
+	IsHotelActive(ctx context.Context, hotelID uuid.UUID) (bool, error)
 	UpdatePassword(ctx context.Context, id uuid.UUID, passwordHash string) error
 	CreateProfile(ctx context.Context, userID uuid.UUID, fullName string, phone *string) (*domain.Profile, error)
 	FindProfileByUserID(ctx context.Context, userID uuid.UUID) (*domain.Profile, error)
@@ -92,6 +93,18 @@ func (r *userRepository) FindByID(ctx context.Context, id uuid.UUID) (*domain.Us
 		return nil, fmt.Errorf("userRepo.FindByID: %w", err)
 	}
 	return u, nil
+}
+
+func (r *userRepository) IsHotelActive(ctx context.Context, hotelID uuid.UUID) (bool, error) {
+	var active bool
+	err := r.db.Pool.QueryRow(ctx, `SELECT is_active FROM hotels WHERE id = $1`, hotelID).Scan(&active)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, ErrNotFound
+		}
+		return false, fmt.Errorf("userRepo.IsHotelActive: %w", err)
+	}
+	return active, nil
 }
 
 func (r *userRepository) UpdatePassword(ctx context.Context, id uuid.UUID, passwordHash string) error {

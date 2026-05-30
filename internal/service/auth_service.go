@@ -123,6 +123,9 @@ func (s *authService) SignIn(ctx context.Context, email, password string) (*Sess
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, ErrInvalidCredentials
 	}
+	if err := s.ensureHotelActive(ctx, user); err != nil {
+		return nil, err
+	}
 
 	roles, err := s.userRepo.GetRoles(ctx, user.ID)
 	if err != nil {
@@ -153,6 +156,9 @@ func (s *authService) RefreshSession(ctx context.Context, refreshToken string) (
 	if err != nil {
 		return nil, ErrTokenInvalid
 	}
+	if err := s.ensureHotelActive(ctx, user); err != nil {
+		return nil, err
+	}
 
 	roles, _ := s.userRepo.GetRoles(ctx, user.ID)
 	_ = s.cache.Set(ctx, revokedKey(refreshToken), "1", s.cfg.Auth.RefreshTokenTTL)
@@ -174,6 +180,9 @@ func (s *authService) GetUserFromToken(ctx context.Context, tokenStr string) (*d
 	user, err := s.userRepo.FindByID(ctx, userID)
 	if err != nil {
 		return nil, nil, ErrTokenInvalid
+	}
+	if err := s.ensureHotelActive(ctx, user); err != nil {
+		return nil, nil, err
 	}
 
 	roleStrs := claims.Roles
@@ -284,6 +293,17 @@ func (s *authService) parseToken(tokenStr, secret string) (*AuthClaims, error) {
 		return nil, ErrTokenInvalid
 	}
 	return claims, nil
+}
+
+func (s *authService) ensureHotelActive(ctx context.Context, user *domain.User) error {
+	if user == nil || user.PlatformAdmin || user.HotelID == nil {
+		return nil
+	}
+	active, err := s.userRepo.IsHotelActive(ctx, *user.HotelID)
+	if err != nil || !active {
+		return ErrForbidden
+	}
+	return nil
 }
 
 func revokedKey(token string) string {
