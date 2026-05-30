@@ -35,10 +35,10 @@ func (r *hotelRepository) CreateHotel(ctx context.Context, hotel *domain.Hotel) 
 		hotel.ID = uuid.New()
 	}
 	if hotel.PlanTier == "" {
-		hotel.PlanTier = "starter"
+		hotel.PlanTier = "basic"
 	}
 	if hotel.Settings == nil {
-		hotel.Settings = map[string]interface{}{"max_rooms": 50, "max_properties": 1, "ai_addon": false}
+		hotel.Settings = map[string]interface{}{"max_rooms": 50, "max_users": 10, "max_properties": 1, "ai_addon": false}
 	}
 	settings, _ := json.Marshal(hotel.Settings)
 	slug := strings.ToLower(strings.TrimSpace(hotel.Slug))

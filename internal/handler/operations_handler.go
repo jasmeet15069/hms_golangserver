@@ -37,6 +37,10 @@ func NewOperationsHandler(pool *pgxpool.Pool, cfg *config.Config) *OperationsHan
 func (h *OperationsHandler) Register(r fiber.Router) {
 	r.Post("/housekeeping/guest-requests", h.CreateGuestHousekeepingRequest)
 	r.Get("/plan/limits", h.PlanLimits)
+	r.Get("/platform/plans", h.PlatformPlans)
+	r.Get("/platform/tenants", h.PlatformTenants)
+	r.Post("/platform/tenants", h.CreatePlatformTenant)
+	r.Put("/platform/tenants/:id/plan", h.UpdateTenantPlan)
 	r.Get("/reports/occupancy", h.OccupancyReport)
 	r.Get("/reports/revenue", h.RevenueReport)
 	r.Get("/reports/complaints", h.ComplaintsReport)
@@ -119,6 +123,13 @@ func (h *OperationsHandler) CreateGuestHousekeepingRequest(c *fiber.Ctx) error {
 
 func (h *OperationsHandler) PlanLimits(c *fiber.Ctx) error {
 	hotelID := postgres.DemoHotelID
+	if claims, err := jwtClaimsFromRequest(c, h.secretKey); err == nil {
+		if rawHotelID, _ := claims["hotel_id"].(string); strings.TrimSpace(rawHotelID) != "" {
+			if parsed, parseErr := uuid.Parse(rawHotelID); parseErr == nil {
+				hotelID = parsed
+			}
+		}
+	}
 	var plan string
 	var settingsBytes []byte
 	err := h.pool.QueryRow(c.Context(), `SELECT plan_tier, settings FROM hotels WHERE id = $1`, hotelID).Scan(&plan, &settingsBytes)
@@ -126,18 +137,28 @@ func (h *OperationsHandler) PlanLimits(c *fiber.Ctx) error {
 		return response.Error(c, fiber.StatusNotFound, "hotel not found")
 	}
 	var roomsUsed, propertiesUsed int
+	var usersUsed int
 	_ = h.pool.QueryRow(c.Context(), `SELECT COUNT(*) FROM rooms WHERE hotel_id = $1`, hotelID).Scan(&roomsUsed)
 	_ = h.pool.QueryRow(c.Context(), `SELECT COUNT(*) FROM properties WHERE hotel_id = $1`, hotelID).Scan(&propertiesUsed)
+	_ = h.pool.QueryRow(c.Context(), `SELECT COUNT(*) FROM users WHERE hotel_id = $1`, hotelID).Scan(&usersUsed)
 	settings := map[string]interface{}{}
 	_ = json.Unmarshal(settingsBytes, &settings)
+	spec := planTierByID(plan)
 	return response.OK(c, map[string]interface{}{
-		"plan":            plan,
-		"settings":        settings,
-		"rooms_used":      roomsUsed,
-		"rooms_max":       settings["max_rooms"],
-		"properties_used": propertiesUsed,
-		"properties_max":  settings["max_properties"],
-		"ai_addon":        settings["ai_addon"],
+		"plan":              normalizePlanTier(plan),
+		"plan_name":         spec.Name,
+		"settings":          settings,
+		"rooms_used":        roomsUsed,
+		"rooms_max":         settings["max_rooms"],
+		"users_used":        usersUsed,
+		"users_max":         settings["max_users"],
+		"properties_used":   propertiesUsed,
+		"properties_max":    settings["max_properties"],
+		"allowed_roles":     settings["allowed_roles"],
+		"ai_addon":          settings["ai_addon"],
+		"ai_voice_agent":    settings["ai_voice_agent"],
+		"ai_voice_booking":  settings["ai_voice_booking"],
+		"database_strategy": settings["database_strategy"],
 	})
 }
 
@@ -611,6 +632,10 @@ func (h *OperationsHandler) UpdateRolePortalSettings(c *fiber.Ctx) error {
 }
 
 func (h *OperationsHandler) ensureRolePortalSettings(c *fiber.Ctx) error {
+	return h.ensureRolePortalSettingsForHotel(c, postgres.DemoHotelID)
+}
+
+func (h *OperationsHandler) ensureRolePortalSettingsForHotel(c *fiber.Ctx, hotelID uuid.UUID) error {
 	if _, err := h.pool.Exec(c.Context(), `
 		CREATE TABLE IF NOT EXISTS role_portal_settings (
 			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -631,7 +656,7 @@ func (h *OperationsHandler) ensureRolePortalSettings(c *fiber.Ctx) error {
 			INSERT INTO role_portal_settings (hotel_id, role, default_path, visible_modules)
 			VALUES ($1,$2,$3,$4::jsonb)
 			ON CONFLICT (hotel_id, role) DO NOTHING`,
-			postgres.DemoHotelID, def.Role, def.DefaultPath, string(raw),
+			hotelID, def.Role, def.DefaultPath, string(raw),
 		); err != nil {
 			return err
 		}

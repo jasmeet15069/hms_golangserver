@@ -76,8 +76,9 @@ func (h *HotelHandler) CreateHotel(c *fiber.Ctx) error {
 
 	plan := strings.ToLower(strings.TrimSpace(req.PlanTier))
 	if plan == "" {
-		plan = "starter"
+		plan = "basic"
 	}
+	plan = normalizePlanTier(plan)
 
 	hotel, err := h.hotels.CreateHotel(c.Context(), &domain.Hotel{
 		Name:         req.Name,
@@ -92,7 +93,7 @@ func (h *HotelHandler) CreateHotel(c *fiber.Ctx) error {
 		Phone:        req.Phone,
 		Email:        req.Email,
 		Website:      req.Website,
-		Settings:     planSettings(plan),
+		Settings:     planSettings(plan, slug),
 	})
 	if err != nil {
 		status := fiber.StatusBadRequest
@@ -229,15 +230,8 @@ func normalizeSlug(value string) string {
 	return strings.Trim(value, "-")
 }
 
-func planSettings(plan string) map[string]interface{} {
-	switch plan {
-	case "growth":
-		return map[string]interface{}{"max_rooms": 200, "max_properties": 3, "ai_addon": false}
-	case "enterprise":
-		return map[string]interface{}{"max_rooms": nil, "max_properties": nil, "ai_addon": false}
-	default:
-		return map[string]interface{}{"max_rooms": 50, "max_properties": 1, "ai_addon": false}
-	}
+func planSettings(plan, slug string) map[string]interface{} {
+	return settingsForPlanTier(plan, slug)
 }
 
 func defaultStringPtr(value *string, fallback string) *string {
