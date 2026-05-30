@@ -426,9 +426,9 @@ var rolePortalDefaults = []rolePortalDefault{
 	{
 		Role:           "property_manager",
 		Label:          "Property Manager",
-		Description:    "Manages property operations and reports.",
+		Description:    "Manages property operations, reports, and staff attendance.",
 		DefaultPath:    "/dashboard",
-		VisibleModules: []string{"dashboard", "staff", "rooms", "guests", "housekeeping", "maintenance", "complaints", "payments", "menu", "inventory", "order_queue", "reports"},
+		VisibleModules: []string{"dashboard", "staff", "rooms", "guests", "housekeeping", "maintenance", "reports"},
 	},
 	{
 		Role:           "receptionist",
@@ -463,14 +463,14 @@ var rolePortalDefaults = []rolePortalDefault{
 		Label:          "Food Manager",
 		Description:    "Menu CRUD, recipes, suppliers, and food inventory.",
 		DefaultPath:    "/menu",
-		VisibleModules: []string{"dashboard", "staff", "menu", "inventory", "complaints"},
+		VisibleModules: []string{"staff", "menu", "inventory"},
 	},
 	{
 		Role:           "kitchen_manager",
 		Label:          "Kitchen Manager",
 		Description:    "Live order queue, cooking workflow, and inventory awareness.",
 		DefaultPath:    "/kitchen",
-		VisibleModules: []string{"dashboard", "staff", "order_queue", "inventory"},
+		VisibleModules: []string{"staff", "order_queue", "inventory"},
 	},
 	{
 		Role:           "waiter",
