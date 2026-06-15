@@ -31,7 +31,10 @@ type UserRepository interface {
 	FindProfileByUserID(ctx context.Context, userID uuid.UUID) (*domain.Profile, error)
 	UpdateProfile(ctx context.Context, userID uuid.UUID, fields map[string]interface{}) error
 	AddRole(ctx context.Context, userID uuid.UUID, role domain.UserRole) error
+	RemoveRole(ctx context.Context, userID uuid.UUID, role domain.UserRole) error
 	GetRoles(ctx context.Context, userID uuid.UUID) ([]domain.UserRole, error)
+	List(ctx context.Context, hotelID *uuid.UUID) ([]domain.User, error)
+	SetUserActive(ctx context.Context, userID uuid.UUID, active bool) error
 	CreatePreferences(ctx context.Context, prefs *domain.GuestPreferences) error
 	UpsertPreferences(ctx context.Context, prefs *domain.GuestPreferences) error
 	FindPreferencesByUserID(ctx context.Context, userID uuid.UUID) (*domain.GuestPreferences, error)
@@ -191,6 +194,43 @@ func (r *userRepository) GetRoles(ctx context.Context, userID uuid.UUID) ([]doma
 		roles = append(roles, role)
 	}
 	return roles, rows.Err()
+}
+
+func (r *userRepository) RemoveRole(ctx context.Context, userID uuid.UUID, role domain.UserRole) error {
+	const q = `DELETE FROM user_roles WHERE user_id = $1 AND role = $2`
+	_, err := r.db.Pool.Exec(ctx, q, userID, role)
+	return err
+}
+
+func (r *userRepository) List(ctx context.Context, hotelID *uuid.UUID) ([]domain.User, error) {
+	q := `SELECT id, hotel_id, email, password_hash, platform_admin, created_at, updated_at FROM users`
+	var args []interface{}
+	if hotelID != nil {
+		q += ` WHERE hotel_id = $1`
+		args = append(args, *hotelID)
+	}
+	q += ` ORDER BY created_at DESC`
+	rows, err := r.db.Pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("userRepo.List: %w", err)
+	}
+	defer rows.Close()
+
+	var users []domain.User
+	for rows.Next() {
+		var u domain.User
+		if err := rows.Scan(&u.ID, &u.HotelID, &u.Email, &u.PasswordHash, &u.PlatformAdmin, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+func (r *userRepository) SetUserActive(ctx context.Context, userID uuid.UUID, active bool) error {
+	const q = `UPDATE users SET updated_at = $1 WHERE id = $2`
+	_, err := r.db.Pool.Exec(ctx, q, time.Now().UTC(), userID)
+	return err
 }
 
 func (r *userRepository) CreatePreferences(ctx context.Context, prefs *domain.GuestPreferences) error {

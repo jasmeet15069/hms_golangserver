@@ -16,6 +16,7 @@ type Handlers struct {
 	Ops       *OperationsHandler
 	AI        *AIHandler
 	Compat    *CompatHandler
+	Users     *UserHandler
 }
 
 func Register(app *fiber.App, h Handlers) {
@@ -83,5 +84,8 @@ func Register(app *fiber.App, h Handlers) {
 	}
 	if h.Compat != nil {
 		h.Compat.Register(api)
+	}
+	if h.Users != nil {
+		h.Users.Register(api)
 	}
 }
