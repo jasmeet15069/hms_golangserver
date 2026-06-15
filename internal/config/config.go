@@ -1,6 +1,3 @@
-// Package config loads and validates all application configuration from
-// environment variables and optional config files. Every field is typed;
-// there are no raw string map lookups in the application code.
 package config
 
 import (
@@ -11,7 +8,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Config is the root configuration object populated at startup.
 type Config struct {
 	App      AppConfig
 	HTTP     HTTPConfig
@@ -20,13 +16,14 @@ type Config struct {
 	Auth     AuthConfig
 	Stripe   StripeConfig
 	Groq     GroqConfig
+	Cerebras CerebrasConfig
 	OTel     OTelConfig
 }
 
 type AppConfig struct {
 	Name        string `mapstructure:"APP_NAME"`
-	Env         string `mapstructure:"APP_ENV"`   // development | staging | production
-	LogLevel    string `mapstructure:"LOG_LEVEL"` // debug | info | warn | error
+	Env         string `mapstructure:"APP_ENV"`
+	LogLevel    string `mapstructure:"LOG_LEVEL"`
 	FrontendURL string `mapstructure:"FRONTEND_URL"`
 }
 
@@ -76,6 +73,11 @@ type GroqConfig struct {
 	Model  string `mapstructure:"GROQ_MODEL"`
 }
 
+type CerebrasConfig struct {
+	APIKey string `mapstructure:"CEREBRAS_API_KEY"`
+	Model  string `mapstructure:"CEREBRAS_MODEL"`
+}
+
 type OTelConfig struct {
 	ServiceName    string `mapstructure:"OTEL_SERVICE_NAME"`
 	ExporterURL    string `mapstructure:"OTEL_EXPORTER_OTLP_ENDPOINT"`
@@ -83,9 +85,6 @@ type OTelConfig struct {
 	TracingEnabled bool   `mapstructure:"OTEL_TRACING_ENABLED"`
 }
 
-// Load reads configuration from environment variables (with .env fallback)
-// and returns a validated Config struct. It panics if required fields are
-// absent so that misconfigured deployments are caught immediately at boot.
 func Load() (*Config, error) {
 	v := viper.New()
 
@@ -121,6 +120,7 @@ func Load() (*Config, error) {
 	v.SetDefault("JWT_REFRESH_TTL", "168h")
 	v.SetDefault("BCRYPT_COST", 12)
 	v.SetDefault("GROQ_MODEL", "llama-3.3-70b-versatile")
+	v.SetDefault("CEREBRAS_MODEL", "zai-glm-4.7")
 	v.SetDefault("OTEL_METRICS_ENABLED", true)
 	v.SetDefault("OTEL_TRACING_ENABLED", false)
 
@@ -168,6 +168,9 @@ func Load() (*Config, error) {
 	cfg.Groq.APIKey = v.GetString("GROQ_API_KEY")
 	cfg.Groq.Model = v.GetString("GROQ_MODEL")
 
+	cfg.Cerebras.APIKey = v.GetString("CEREBRAS_API_KEY")
+	cfg.Cerebras.Model = v.GetString("CEREBRAS_MODEL")
+
 	cfg.OTel.ServiceName = v.GetString("OTEL_SERVICE_NAME")
 	cfg.OTel.ExporterURL = v.GetString("OTEL_EXPORTER_OTLP_ENDPOINT")
 	cfg.OTel.MetricsEnabled = v.GetBool("OTEL_METRICS_ENABLED")
@@ -185,12 +188,10 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// IsProd returns true when the app is running in production mode.
 func (c *Config) IsProd() bool {
 	return strings.EqualFold(c.App.Env, "production")
 }
 
-// Addr returns the full listen address, e.g. "0.0.0.0:8787".
 func (c *Config) Addr() string {
 	return fmt.Sprintf("%s:%d", c.HTTP.Host, c.HTTP.Port)
 }

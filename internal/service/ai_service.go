@@ -101,13 +101,12 @@ func NewAIService(c cache.Cache, cfg *config.Config, log *zap.Logger) AIService 
 }
 
 func (s *aiService) Chat(ctx context.Context, rooms []domain.Room, activeOrders, pendingComplaints int, msgs []domain.ChatMessage) (string, []string, error) {
-	roomTypesJSON, _ := json.Marshal(buildRoomTypeAvailability(rooms))
+	roomsJSON, _ := json.Marshal(rooms)
 	system := fmt.Sprintf(
 		"You are the AI concierge for Hotel Harmony. Answer in the user's language. "+
 			"Use only the hotel data included here; do not invent room numbers, prices, orders, or complaints. "+
-			"Guests choose room type only; do not reveal physical room numbers before a booking exists. "+
-			"Available room types: %s. Active orders: %d. Pending complaints: %d.",
-		string(roomTypesJSON), activeOrders, pendingComplaints,
+			"Rooms: %s. Active orders: %d. Pending complaints: %d.",
+		string(roomsJSON), activeOrders, pendingComplaints,
 	)
 
 	messages := make([]groqMessage, 0, len(msgs)+1)
@@ -116,76 +115,22 @@ func (s *aiService) Chat(ctx context.Context, rooms []domain.Room, activeOrders,
 		messages = append(messages, groqMessage{Role: m.Role, Content: m.Content})
 	}
 
-	reply, err := s.callGroq(ctx, messages, "text")
+	reply, _, err := s.callAI(ctx, messages, "text")
 	if err != nil {
 		var available []string
-		for _, r := range buildRoomTypeAvailability(rooms) {
-			available = append(available, fmt.Sprintf("%s (%d available, from $%.0f/night)", r.RoomType, r.AvailableCount, r.PricePerNight))
+		for _, r := range rooms {
+			if r.Status == domain.RoomStatusAvailable {
+				available = append(available, fmt.Sprintf("Room %s (%s, $%.0f/night)", r.RoomNumber, r.RoomType, r.PricePerNight))
+			}
 		}
 		if len(available) > 0 {
-			reply = fmt.Sprintf("I can help with that. Available room types right now: %s. Choose a type and the system will assign a room after booking.", strings.Join(available[:min(5, len(available))], ", "))
+			reply = fmt.Sprintf("I can help with that. Available rooms right now: %s.", strings.Join(available[:min(5, len(available))], ", "))
 		} else {
 			reply = "I can help with hotel services, but no available rooms are listed right now."
 		}
 		return reply, []string{"local_fallback"}, nil
 	}
-	return reply, []string{"groq_chat_completion"}, nil
-}
-
-type aiRoomAvailability struct {
-	RoomType       string   `json:"room_type"`
-	AvailableCount int      `json:"available_count"`
-	Capacity       int      `json:"capacity"`
-	PricePerNight  float64  `json:"price_per_night"`
-	Amenities      []string `json:"amenities,omitempty"`
-}
-
-func buildRoomTypeAvailability(rooms []domain.Room) []aiRoomAvailability {
-	type groupedRoom struct {
-		aiRoomAvailability
-		amenitySet map[string]struct{}
-	}
-	grouped := map[string]*groupedRoom{}
-	for _, room := range rooms {
-		if room.Status != domain.RoomStatusAvailable {
-			continue
-		}
-		key := strings.ToLower(strings.TrimSpace(room.RoomType))
-		if key == "" {
-			key = "standard"
-		}
-		if _, ok := grouped[key]; !ok {
-			grouped[key] = &groupedRoom{
-				aiRoomAvailability: aiRoomAvailability{
-					RoomType:       roomTypeLabel(room.RoomType),
-					AvailableCount: 0,
-					Capacity:       room.Capacity,
-					PricePerNight:  room.PricePerNight,
-				},
-				amenitySet: map[string]struct{}{},
-			}
-		}
-		item := grouped[key]
-		item.AvailableCount++
-		if room.Capacity > item.Capacity {
-			item.Capacity = room.Capacity
-		}
-		if item.PricePerNight == 0 || room.PricePerNight < item.PricePerNight {
-			item.PricePerNight = room.PricePerNight
-		}
-		for _, amenity := range room.Amenities {
-			if _, ok := item.amenitySet[amenity]; !ok {
-				item.amenitySet[amenity] = struct{}{}
-				item.Amenities = append(item.Amenities, amenity)
-			}
-		}
-	}
-
-	out := make([]aiRoomAvailability, 0, len(grouped))
-	for _, item := range grouped {
-		out = append(out, item.aiRoomAvailability)
-	}
-	return out
+	return reply, []string{"cerebras_chat_completion"}, nil
 }
 
 func (s *aiService) MenuSuggestions(ctx context.Context, req MenuSuggestionsRequest) (map[string]interface{}, error) {
@@ -210,7 +155,7 @@ func (s *aiService) MenuSuggestions(ctx context.Context, req MenuSuggestionsRequ
 		string(menuJSON), string(prefJSON), string(pastJSON), req.TimeOfDay,
 	)
 
-	raw, err := s.callGroq(ctx, []groqMessage{{Role: "user", Content: prompt}}, "json")
+	raw, _, err := s.callAI(ctx, []groqMessage{{Role: "user", Content: prompt}}, "json")
 	if err != nil {
 		return fallback, nil
 	}
@@ -240,7 +185,7 @@ func (s *aiService) ComplaintAnalysis(ctx context.Context, req ComplaintAnalysis
 		req.Description, string(histJSON),
 	)
 
-	raw, err := s.callGroq(ctx, []groqMessage{{Role: "user", Content: prompt}}, "json")
+	raw, _, err := s.callAI(ctx, []groqMessage{{Role: "user", Content: prompt}}, "json")
 	if err != nil {
 		return fallback, nil
 	}
@@ -282,7 +227,7 @@ func (s *aiService) InventoryAlerts(ctx context.Context, items []domain.Inventor
 
 	alertsJSON, _ := json.Marshal(alerts)
 	prompt := fmt.Sprintf("Return JSON with alerts and summary. Improve these hotel inventory recommendations: %s", string(alertsJSON))
-	raw, err := s.callGroq(ctx, []groqMessage{{Role: "user", Content: prompt}}, "json")
+	raw, _, err := s.callAI(ctx, []groqMessage{{Role: "user", Content: prompt}}, "json")
 	if err != nil {
 		return map[string]interface{}{"alerts": alerts, "summary": summary}, nil
 	}
@@ -299,6 +244,11 @@ type groqMessage struct {
 	Content string `json:"content"`
 }
 
+type cerebrasMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
 type groqRequest struct {
 	Model          string            `json:"model"`
 	Messages       []groqMessage     `json:"messages"`
@@ -306,8 +256,16 @@ type groqRequest struct {
 	ResponseFormat map[string]string `json:"response_format,omitempty"`
 }
 
+type cerebrasRequest struct {
+	Model          string                `json:"model"`
+	Messages       []cerebrasMessage     `json:"messages"`
+	Temperature    float64               `json:"temperature"`
+	MaxTokens      int                   `json:"max_completion_tokens,omitempty"`
+	ResponseFormat map[string]string     `json:"response_format,omitempty"`
+}
+
 func (s *aiService) callGroq(ctx context.Context, messages []groqMessage, format string) (string, error) {
-	if s.cfg.Groq.APIKey == "" {
+	if s.cfg.Cerebras.APIKey == "" && s.cfg.Groq.APIKey == "" {
 		return "", fmt.Errorf("GROQ_API_KEY not configured")
 	}
 	if s.cb.isOpen() {
@@ -379,6 +337,99 @@ func (s *aiService) callGroq(ctx context.Context, messages []groqMessage, format
 	return "", lastErr
 }
 
+
+func (s *aiService) callAI(ctx context.Context, messages []groqMessage, format string) (string, string, error) {
+	if s.cfg.Cerebras.APIKey != "" {
+		cm := make([]cerebrasMessage, len(messages))
+		for i, m := range messages {
+			cm[i] = cerebrasMessage{Role: m.Role, Content: m.Content}
+		}
+		result, err := s.callCerebras(ctx, cm, format)
+		if err == nil {
+			return result, "cerebras_chat_completion", nil
+		}
+		s.log.Warn("cerebras failed, falling back to groq", zap.Error(err))
+	}
+	result, err := s.callGroq(ctx, messages, format)
+	if err != nil {
+		return "", "", err
+	}
+	return result, "groq_chat_completion", nil
+}
+
+func (s *aiService) callCerebras(ctx context.Context, messages []cerebrasMessage, format string) (string, error) {
+	if s.cfg.Cerebras.APIKey == "" {
+		return "", fmt.Errorf("CEREBRAS_API_KEY not configured")
+	}
+	if s.cb.isOpen() {
+		return "", fmt.Errorf("cerebras circuit breaker open")
+	}
+
+	payload := cerebrasRequest{
+		Model:       s.cfg.Cerebras.Model,
+		Messages:    messages,
+		Temperature: 0.2,
+		MaxTokens:   65000,
+	}
+	if format == "json" {
+		payload.ResponseFormat = map[string]string{"type": "json_object"}
+	}
+
+	body, _ := json.Marshal(payload)
+
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(time.Duration(attempt*attempt) * 500 * time.Millisecond):
+			}
+		}
+
+		reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		req, _ := http.NewRequestWithContext(reqCtx, http.MethodPost,
+			"https://api.cerebras.ai/v1/chat/completions",
+			bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+s.cfg.Cerebras.APIKey)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "HotelHarmony/2.0")
+
+		resp, err := s.httpClient.Do(req)
+		cancel()
+		if err != nil {
+			lastErr = err
+			s.cb.recordFailure()
+			continue
+		}
+
+		respBody, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("cerebras status %d: %s", resp.StatusCode, string(respBody))
+			s.cb.recordFailure()
+			continue
+		}
+
+		var result struct {
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(respBody, &result); err != nil || len(result.Choices) == 0 {
+			lastErr = fmt.Errorf("cerebras: invalid response shape")
+			continue
+		}
+
+		s.cb.recordSuccess()
+		return result.Choices[0].Message.Content, nil
+	}
+
+	return "", lastErr
+}
 func buildMenuFallback(items []map[string]interface{}) map[string]interface{} {
 	limit := 3
 	if len(items) < limit {
