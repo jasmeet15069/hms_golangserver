@@ -74,6 +74,7 @@ func main() {
 	aiSvc := service.NewAIService(c, cfg, zlog)
 	emailSvc := service.NewEmailService(cfg, zlog)
 	smsSvc := service.NewSMSService(cfg, zlog)
+	_, _ = emailSvc, smsSvc
 
 	app := fiber.New(fiber.Config{
 		AppName:      cfg.App.Name,
@@ -93,7 +94,7 @@ func main() {
 	}))
 	app.Use(fiberlogger.New())
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     cfg.App.FrontendURL + ",http://localhost:8080,http://localhost:8081,http://127.0.0.1:8080,http://127.0.0.1:8081",
+		AllowOrigins:     cfg.App.FrontendURL + ",http://localhost:8080,http://localhost:8081,http://127.0.0.1:8080,http://127.0.0.1:8081,https://client-ochre-xi-83.vercel.app,https://staff-flame.vercel.app",
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
 		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 		AllowCredentials: true,
