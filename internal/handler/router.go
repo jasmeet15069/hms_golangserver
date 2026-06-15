@@ -7,16 +7,17 @@ import (
 )
 
 type Handlers struct {
-	Health    *HealthHandler
-	Auth      *AuthHandler
-	Hotels    *HotelHandler
-	Payments  *PaymentHandler
-	Dashboard *DashboardHandler
-	Rooms     *RoomHandler
-	Ops       *OperationsHandler
-	AI        *AIHandler
-	Compat    *CompatHandler
-	Users     *UserHandler
+	Health      *HealthHandler
+	Auth        *AuthHandler
+	Hotels      *HotelHandler
+	Payments    *PaymentHandler
+	Dashboard   *DashboardHandler
+	Rooms       *RoomHandler
+	Ops         *OperationsHandler
+	AI          *AIHandler
+	Compat      *CompatHandler
+	Users       *UserHandler
+	Reservations *ReservationHandler
 }
 
 func Register(app *fiber.App, h Handlers) {
@@ -87,5 +88,8 @@ func Register(app *fiber.App, h Handlers) {
 	}
 	if h.Users != nil {
 		h.Users.Register(api)
+	}
+	if h.Reservations != nil {
+		h.Reservations.Register(api)
 	}
 }

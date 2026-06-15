@@ -102,6 +102,7 @@ func main() {
 
 	v := validator.New()
 	userHandler := handler.NewUserHandler(userRepo, authSvc, v)
+	reservationHandler := handler.NewReservationHandler(roomRepo, cfg)
 	handler.Register(app, handler.Handlers{
 		Health:    handler.NewHealthHandler(db, c),
 		Auth:      handler.NewAuthHandler(authSvc, v),
@@ -112,7 +113,8 @@ func main() {
 		Ops:       handler.NewOperationsHandler(db.Pool, cfg),
 		AI:     handler.NewAIHandler(aiSvc, roomRepo, dashboardRepo, cfg),
 		Compat: handler.NewCompatHandler(db.Pool, cfg),
-		Users:  userHandler,
+		Users:        userHandler,
+		Reservations: reservationHandler,
 	})
 
 	errCh := make(chan error, 1)
