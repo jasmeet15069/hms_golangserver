@@ -23,6 +23,7 @@ func NewDashboardHandler(dashboard postgres.DashboardRepository, c cache.Cache) 
 
 func (h *DashboardHandler) Register(r fiber.Router) {
 	r.Get("/dashboard/stats", h.Stats)
+	r.Get("/dashboard/data", h.FullData)
 }
 
 func (h *DashboardHandler) Stats(c *fiber.Ctx) error {
@@ -43,4 +44,19 @@ func (h *DashboardHandler) Stats(c *fiber.Ctx) error {
 	}
 	c.Set("X-Cache", "MISS")
 	return response.OK(c, stats)
+}
+
+func (h *DashboardHandler) FullData(c *fiber.Ctx) error {
+	stats, err := h.dashboard.GetStats(c.Context())
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	charts, err := h.dashboard.GetChartData(c.Context())
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	return response.OK(c, map[string]interface{}{
+		"stats":  stats,
+		"charts": charts,
+	})
 }

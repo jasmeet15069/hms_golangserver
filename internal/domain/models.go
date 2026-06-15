@@ -459,6 +459,63 @@ type PaymentGatewayConfig struct {
 	BankTransferEnabled          bool      `json:"bank_transfer_enabled"`
 }
 
+// ChartRevenuePoint is one day of revenue breakdown.
+type ChartRevenuePoint struct {
+	Date  string  `json:"date"`
+	Room  float64 `json:"room"`
+	FnB   float64 `json:"fnb"`
+	Other float64 `json:"other"`
+}
+
+// ChartOccupancyPoint is one day of occupancy data.
+type ChartOccupancyPoint struct {
+	Date      string  `json:"date"`
+	Occupied  int     `json:"occupied"`
+	Available int     `json:"available"`
+	Rate      float64 `json:"rate"`
+}
+
+// DeptRevenueItem is a department's current vs previous month revenue.
+type DeptRevenueItem struct {
+	Department string  `json:"department"`
+	Current    float64 `json:"current"`
+	Previous   float64 `json:"previous"`
+}
+
+// GuestStayItem is a short guest stay summary for dashboard lists.
+type GuestStayItem struct {
+	GuestName string `json:"guest_name"`
+	Room      string `json:"room"`
+	Status    string `json:"status"`
+}
+
+// PendingPaymentItem is a short payment summary.
+type PendingPaymentItem struct {
+	GuestName string  `json:"guest_name"`
+	Amount    float64 `json:"amount"`
+	DueDate   string  `json:"due_date"`
+	Status    string  `json:"status"`
+}
+
+// ActivityItem is a single audit log entry.
+type ActivityItem struct {
+	Action    string `json:"action"`
+	User      string `json:"user"`
+	Details   string `json:"details"`
+	CreatedAt string `json:"created_at"`
+}
+
+// DashboardChartData is the full dashboard data payload.
+type DashboardChartData struct {
+	RevenueTrend      []ChartRevenuePoint  `json:"revenue_trend"`
+	OccupancyTrend    []ChartOccupancyPoint `json:"occupancy_trend"`
+	DepartmentRevenue []DeptRevenueItem    `json:"department_revenue"`
+	ArrivalsToday     []GuestStayItem      `json:"arrivals_today"`
+	DeparturesToday   []GuestStayItem      `json:"departures_today"`
+	PendingPayments   []PendingPaymentItem `json:"pending_payments"`
+	RecentActivity    []ActivityItem       `json:"recent_activity"`
+}
+
 // DashboardStats is the aggregated read model for the dashboard.
 type DashboardStats struct {
 	OccupancyRate          float64 `json:"occupancy_rate"`
