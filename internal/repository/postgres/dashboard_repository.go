@@ -242,7 +242,7 @@ func (r *dashboardRepository) GetChartData(ctx context.Context) (*domain.Dashboa
 			var row revenueTrendRow
 			if err := revRows.Scan(&row.Date, &row.Room, &row.FnB, &row.Other); err == nil {
 				cd.RevenueTrend = append(cd.RevenueTrend, domain.ChartRevenuePoint{
-					Date: row.Date, Room: row.Room, FnB: row.Fnb, Other: row.Other,
+					Date: row.Date, Room: row.Room, FnB: row.FnB, Other: row.Other,
 				})
 			}
 		}
