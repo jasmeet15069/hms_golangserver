@@ -72,6 +72,8 @@ func main() {
 	authSvc := service.NewAuthService(userRepo, c, cfg)
 	paymentSvc := service.NewPaymentService(roomRepo, paymentRepo, c, cfg, zlog)
 	aiSvc := service.NewAIService(c, cfg, zlog)
+	emailSvc := service.NewEmailService(cfg, zlog)
+	smsSvc := service.NewSMSService(cfg, zlog)
 
 	app := fiber.New(fiber.Config{
 		AppName:      cfg.App.Name,

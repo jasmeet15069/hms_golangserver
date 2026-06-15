@@ -17,6 +17,8 @@ type Config struct {
 	Stripe   StripeConfig
 	Groq     GroqConfig
 	Cerebras CerebrasConfig
+	Email    EmailConfig
+	Twilio   TwilioConfig
 	OTel     OTelConfig
 }
 
@@ -78,6 +80,21 @@ type CerebrasConfig struct {
 	Model  string `mapstructure:"CEREBRAS_MODEL"`
 }
 
+type EmailConfig struct {
+	Provider string `mapstructure:"EMAIL_PROVIDER"`
+	Host     string `mapstructure:"SMTP_HOST"`
+	Port     int    `mapstructure:"SMTP_PORT"`
+	Username string `mapstructure:"SMTP_USERNAME"`
+	Password string `mapstructure:"SMTP_PASSWORD"`
+	From     string `mapstructure:"EMAIL_FROM"`
+}
+
+type TwilioConfig struct {
+	AccountSID  string `mapstructure:"TWILIO_ACCOUNT_SID"`
+	AuthToken   string `mapstructure:"TWILIO_AUTH_TOKEN"`
+	PhoneNumber string `mapstructure:"TWILIO_PHONE_NUMBER"`
+}
+
 type OTelConfig struct {
 	ServiceName    string `mapstructure:"OTEL_SERVICE_NAME"`
 	ExporterURL    string `mapstructure:"OTEL_EXPORTER_OTLP_ENDPOINT"`
@@ -121,6 +138,9 @@ func Load() (*Config, error) {
 	v.SetDefault("BCRYPT_COST", 12)
 	v.SetDefault("GROQ_MODEL", "llama-3.3-70b-versatile")
 	v.SetDefault("CEREBRAS_MODEL", "zai-glm-4.7")
+	v.SetDefault("EMAIL_PROVIDER", "smtp")
+	v.SetDefault("SMTP_HOST", "smtp.gmail.com")
+	v.SetDefault("SMTP_PORT", 587)
 	v.SetDefault("OTEL_METRICS_ENABLED", true)
 	v.SetDefault("OTEL_TRACING_ENABLED", false)
 
@@ -170,6 +190,17 @@ func Load() (*Config, error) {
 
 	cfg.Cerebras.APIKey = v.GetString("CEREBRAS_API_KEY")
 	cfg.Cerebras.Model = v.GetString("CEREBRAS_MODEL")
+
+	cfg.Email.Provider = v.GetString("EMAIL_PROVIDER")
+	cfg.Email.Host = v.GetString("SMTP_HOST")
+	cfg.Email.Port = v.GetInt("SMTP_PORT")
+	cfg.Email.Username = v.GetString("SMTP_USERNAME")
+	cfg.Email.Password = v.GetString("SMTP_PASSWORD")
+	cfg.Email.From = v.GetString("EMAIL_FROM")
+
+	cfg.Twilio.AccountSID = v.GetString("TWILIO_ACCOUNT_SID")
+	cfg.Twilio.AuthToken = v.GetString("TWILIO_AUTH_TOKEN")
+	cfg.Twilio.PhoneNumber = v.GetString("TWILIO_PHONE_NUMBER")
 
 	cfg.OTel.ServiceName = v.GetString("OTEL_SERVICE_NAME")
 	cfg.OTel.ExporterURL = v.GetString("OTEL_EXPORTER_OTLP_ENDPOINT")
