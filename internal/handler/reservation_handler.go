@@ -11,16 +11,19 @@ import (
 	"github.com/hotelharmony/api/internal/config"
 	"github.com/hotelharmony/api/internal/domain"
 	"github.com/hotelharmony/api/internal/repository/postgres"
+	"github.com/hotelharmony/api/internal/service"
 	"github.com/hotelharmony/api/pkg/response"
 )
 
 type ReservationHandler struct {
 	roomRepo postgres.RoomRepository
 	cfg      *config.Config
+	emailSvc *service.EmailService
+	smsSvc   *service.SMSService
 }
 
-func NewReservationHandler(roomRepo postgres.RoomRepository, cfg *config.Config) *ReservationHandler {
-	return &ReservationHandler{roomRepo: roomRepo, cfg: cfg}
+func NewReservationHandler(roomRepo postgres.RoomRepository, cfg *config.Config, emailSvc *service.EmailService, smsSvc *service.SMSService) *ReservationHandler {
+	return &ReservationHandler{roomRepo: roomRepo, cfg: cfg, emailSvc: emailSvc, smsSvc: smsSvc}
 }
 
 func (h *ReservationHandler) Register(r fiber.Router) {
@@ -255,6 +258,23 @@ func (h *ReservationHandler) CheckIn(c *fiber.Ctx) error {
 		_ = h.roomRepo.UpdateRoomStatus(c.Context(), stay.RoomID, domain.RoomStatusOccupied)
 	}
 
+	if stay != nil && stay.GuestEmail != nil && stay.GuestPhone != nil {
+		roomNumber := ""
+		if stay.Room != nil {
+			roomNumber = stay.Room.RoomNumber
+		}
+		checkInDate := stay.CheckInDate.Format("2006-01-02")
+		checkOutDate := stay.CheckOutDate.Format("2006-01-02")
+		go func() {
+			defer func() { recover() }()
+			_ = h.emailSvc.SendBookingConfirmation(*stay.GuestEmail, stay.GuestName, "Grand Hotel Mumbai", roomNumber, checkInDate, checkOutDate)
+		}()
+		go func() {
+			defer func() { recover() }()
+			_ = h.smsSvc.SendBookingConfirmation(*stay.GuestPhone, stay.GuestName, "Grand Hotel Mumbai", roomNumber, checkInDate, checkOutDate)
+		}()
+	}
+
 	return response.OK(c, map[string]string{"status": "checked_in"})
 }
 
@@ -272,6 +292,23 @@ func (h *ReservationHandler) CheckOut(c *fiber.Ctx) error {
 	if stay != nil {
 		_ = h.roomRepo.UpdateRoomStatus(c.Context(), stay.RoomID, domain.RoomStatusCleaning)
 	}
+
+	if stay != nil && stay.GuestEmail != nil && stay.GuestPhone != nil {
+		totalAmount := "0.00"
+		if stay.TotalAmount != nil {
+			totalAmount = fmt.Sprintf("%.2f", *stay.TotalAmount)
+		}
+		dueDate := stay.CheckOutDate.Format("2006-01-02")
+		go func() {
+			defer func() { recover() }()
+			_ = h.emailSvc.SendInvoice(*stay.GuestEmail, stay.GuestName, "Grand Hotel Mumbai", "N/A", totalAmount, dueDate)
+		}()
+		go func() {
+			defer func() { recover() }()
+			_ = h.smsSvc.Send(*stay.GuestPhone, "Thank you for staying at Grand Hotel Mumbai! Your checkout is complete.")
+		}()
+	}
+
 	return response.OK(c, map[string]string{"status": "checked_out"})
 }
 

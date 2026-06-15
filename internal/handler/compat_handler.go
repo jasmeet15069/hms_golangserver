@@ -29,6 +29,22 @@ func NewCompatHandler(pool *pgxpool.Pool, cfg *config.Config) *CompatHandler {
 	return &CompatHandler{pool: pool, secretKey: secret}
 }
 
+// hotelID resolves the caller's tenant from the authenticated JWT's hotel_id
+// claim, falling back to the demo/default hotel only when the token carries no
+// hotel_id. Every tenant-scoped query binds this value so a caller can only
+// read/update/delete rows belonging to their own hotel. Modeled on
+// operations_handler.go PlanLimits and authctx.go baseHandler.hotelID.
+func (h *CompatHandler) hotelID(c *fiber.Ctx) uuid.UUID {
+	if claims, err := jwtClaimsFromRequest(c, h.secretKey); err == nil {
+		if raw, _ := claims["hotel_id"].(string); strings.TrimSpace(raw) != "" {
+			if parsed, perr := uuid.Parse(strings.TrimSpace(raw)); perr == nil {
+				return parsed
+			}
+		}
+	}
+	return postgres.DemoHotelID
+}
+
 func (h *CompatHandler) Register(r fiber.Router) {
 	r.Get("/tables/:table", h.Select)
 	r.Post("/tables/:table", h.Insert)
@@ -244,7 +260,7 @@ func (h *CompatHandler) Delete(c *fiber.Ctx) error {
 			if id == "" {
 				return response.Error(c, fiber.StatusBadRequest, "id filter is required")
 			}
-			if _, err := h.pool.Exec(c.Context(), `DELETE FROM rooms WHERE id = $1`, id); err != nil {
+			if _, err := h.pool.Exec(c.Context(), `DELETE FROM rooms WHERE id = $1 AND hotel_id = $2`, id, h.hotelID(c)); err != nil {
 				return response.Error(c, fiber.StatusBadRequest, err.Error())
 			}
 			return response.OK(c, []map[string]interface{}{})
@@ -252,11 +268,22 @@ func (h *CompatHandler) Delete(c *fiber.Ctx) error {
 			if id == "" {
 				return response.Error(c, fiber.StatusBadRequest, "id filter is required")
 			}
-			if _, err := h.pool.Exec(c.Context(), `DELETE FROM guest_stays WHERE id = $1`, id); err != nil {
+			if _, err := h.pool.Exec(c.Context(), `DELETE FROM guest_stays WHERE id = $1 AND hotel_id = $2`, id, h.hotelID(c)); err != nil {
 				return response.Error(c, fiber.StatusBadRequest, err.Error())
 			}
 			return response.OK(c, []map[string]interface{}{})
-		case "profiles", "complaints", "menu_categories", "menu_items", "inventory_items", "guest_preferences", "orders", "payments", "payment_settings", "staff_shifts", "housekeeping_assignments", "work_orders":
+		case "complaints", "menu_categories", "menu_items", "inventory_items", "orders", "payments", "payment_settings", "staff_shifts", "housekeeping_assignments", "work_orders":
+			// Tenant-scoped tables: restrict the delete to the caller's hotel so
+			// a guessed id cannot reach another tenant's rows.
+			if id == "" {
+				return response.Error(c, fiber.StatusBadRequest, "id filter is required")
+			}
+			if _, err := h.pool.Exec(c.Context(), fmt.Sprintf(`DELETE FROM %s WHERE id = $1 AND hotel_id = $2`, table), id, h.hotelID(c)); err != nil {
+				return response.Error(c, fiber.StatusBadRequest, err.Error())
+			}
+			return response.OK(c, []map[string]interface{}{})
+		case "profiles", "guest_preferences":
+			// User-keyed identity tables; not tenant-scoped here (see note in Update).
 			if id == "" {
 				return response.Error(c, fiber.StatusBadRequest, "id filter is required")
 			}

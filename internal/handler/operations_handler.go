@@ -41,6 +41,7 @@ func (h *OperationsHandler) Register(r fiber.Router) {
 	r.Get("/platform/tenants", h.PlatformTenants)
 	r.Post("/platform/tenants", h.CreatePlatformTenant)
 	r.Put("/platform/tenants/:id/plan", h.UpdateTenantPlan)
+	r.Get("/reports/consolidated", h.ConsolidatedReport)
 	r.Get("/reports/occupancy", h.OccupancyReport)
 	r.Get("/reports/revenue", h.RevenueReport)
 	r.Get("/reports/complaints", h.ComplaintsReport)
@@ -160,6 +161,59 @@ func (h *OperationsHandler) PlanLimits(c *fiber.Ctx) error {
 		"ai_voice_booking":  settings["ai_voice_booking"],
 		"database_strategy": settings["database_strategy"],
 	})
+}
+
+func (h *OperationsHandler) ConsolidatedReport(c *fiber.Ctx) error {
+	hotelID := postgres.DemoHotelID
+	type consolidated struct {
+		TotalRooms      int     `json:"total_rooms"`
+		OccupiedRooms   int     `json:"occupied_rooms"`
+		AvailableRooms  int     `json:"available_rooms"`
+		TotalRevenue    float64 `json:"total_revenue"`
+		PendingPayments float64 `json:"pending_payments"`
+		ActiveBookings  int     `json:"active_bookings"`
+		ArrivalsToday   int     `json:"arrivals_today"`
+		DeparturesToday int     `json:"departures_today"`
+		OpenComplaints  int     `json:"open_complaints"`
+		OccupancyRate   float64 `json:"occupancy_rate"`
+		AvgOccupancy    float64 `json:"avg_occupancy"`
+		TotalBookings   int     `json:"total_bookings"`
+		AvgDailyRate    float64 `json:"avg_daily_rate"`
+		RevPAR          float64 `json:"revpar"`
+	}
+	var r consolidated
+	err := h.pool.QueryRow(c.Context(), `
+		SELECT
+			(SELECT COUNT(*) FROM rooms WHERE hotel_id = $1),
+			(SELECT COUNT(*) FROM rooms WHERE hotel_id = $1 AND status = 'occupied'),
+			(SELECT COUNT(*) FROM rooms WHERE hotel_id = $1 AND status = 'available'),
+			(SELECT COALESCE(SUM(amount),0) FROM payments WHERE hotel_id = $1 AND status = 'completed'),
+			(SELECT COALESCE(SUM(total),0) FROM invoices WHERE hotel_id = $1 AND (paid_at IS NULL)),
+			(SELECT COUNT(*) FROM guest_stays WHERE hotel_id = $1 AND actual_check_out IS NULL),
+			(SELECT COUNT(*) FROM guest_stays WHERE hotel_id = $1 AND check_in_date::date = CURRENT_DATE),
+			(SELECT COUNT(*) FROM guest_stays WHERE hotel_id = $1 AND check_out_date::date = CURRENT_DATE AND actual_check_out IS NULL),
+			(SELECT COUNT(*) FROM complaints WHERE hotel_id = $1 AND status = 'open')
+	`, hotelID).Scan(
+		&r.TotalRooms, &r.OccupiedRooms, &r.AvailableRooms,
+		&r.TotalRevenue, &r.PendingPayments,
+		&r.ActiveBookings, &r.ArrivalsToday, &r.DeparturesToday,
+		&r.OpenComplaints,
+	)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, err.Error())
+	}
+	if r.TotalRooms > 0 {
+		r.OccupancyRate = float64(r.OccupiedRooms) / float64(r.TotalRooms) * 100
+		r.AvgOccupancy = r.OccupancyRate
+	}
+	r.TotalBookings = r.ActiveBookings
+	if r.OccupiedRooms > 0 {
+		r.AvgDailyRate = r.TotalRevenue / float64(r.OccupiedRooms)
+	}
+	if r.TotalRooms > 0 {
+		r.RevPAR = r.TotalRevenue / float64(r.TotalRooms)
+	}
+	return response.OK(c, r)
 }
 
 func (h *OperationsHandler) OccupancyReport(c *fiber.Ctx) error {
@@ -435,14 +489,14 @@ var rolePortalDefaults = []rolePortalDefault{
 		Label:          "Hotel Admin (Owner)",
 		Description:    "Owner control across setup, staff, reports, payments, and all operations.",
 		DefaultPath:    "/dashboard",
-		VisibleModules: []string{"dashboard", "rooms", "guests", "housekeeping", "maintenance", "complaints", "payments", "menu", "inventory", "order_queue", "reports", "settings", "staff"},
+		VisibleModules: []string{"dashboard", "rooms", "guests", "housekeeping", "maintenance", "complaints", "payments", "menu", "inventory", "order_queue", "reports", "settings", "staff", "pos", "users", "revenue", "procurement", "crm", "channels", "night-audit", "booking-engine", "multi-property"},
 	},
 	{
 		Role:           "hotel_admin",
 		Label:          "Hotel Admin",
 		Description:    "Owns hotel setup, billing, staff, and operations.",
 		DefaultPath:    "/dashboard",
-		VisibleModules: []string{"dashboard", "rooms", "guests", "housekeeping", "maintenance", "complaints", "payments", "menu", "inventory", "order_queue", "reports", "settings", "staff"},
+		VisibleModules: []string{"dashboard", "rooms", "guests", "housekeeping", "maintenance", "complaints", "payments", "menu", "inventory", "order_queue", "reports", "settings", "staff", "pos", "users", "revenue", "procurement", "crm", "channels", "night-audit", "booking-engine", "multi-property"},
 	},
 	{
 		Role:           "property_manager",
@@ -511,20 +565,29 @@ var rolePortalDefaultsByRole = func() map[string]rolePortalDefault {
 }()
 
 var rolePortalModulePath = map[string]string{
-	"dashboard":    "/dashboard",
-	"rooms":        "/rooms",
-	"guests":       "/guests",
-	"housekeeping": "/housekeeping",
-	"maintenance":  "/maintenance",
-	"complaints":   "/complaints",
-	"payments":     "/payments",
-	"menu":         "/menu",
-	"inventory":    "/inventory",
-	"order_queue":  "/kitchen",
-	"reports":      "/reports",
-	"settings":     "/settings",
-	"staff":        "/staff",
-	"platform":     "/platform",
+	"dashboard":      "/dashboard",
+	"rooms":          "/rooms",
+	"guests":         "/guests",
+	"housekeeping":   "/housekeeping",
+	"maintenance":    "/maintenance",
+	"complaints":     "/complaints",
+	"payments":       "/payments",
+	"menu":           "/menu",
+	"inventory":      "/inventory",
+	"order_queue":    "/kitchen",
+	"reports":        "/reports",
+	"settings":       "/settings",
+	"staff":          "/staff",
+	"platform":       "/platform",
+	"pos":            "/pos",
+	"users":          "/users",
+	"revenue":        "/revenue",
+	"procurement":    "/procurement",
+	"crm":            "/crm",
+	"channels":       "/channels",
+	"night-audit":    "/night-audit",
+	"booking-engine": "/booking-engine",
+	"multi-property": "/multi-property",
 }
 
 type updateRolePortalSettingsRequest struct {

@@ -74,7 +74,6 @@ func main() {
 	aiSvc := service.NewAIService(c, cfg, zlog)
 	emailSvc := service.NewEmailService(cfg, zlog)
 	smsSvc := service.NewSMSService(cfg, zlog)
-	_, _ = emailSvc, smsSvc
 
 	app := fiber.New(fiber.Config{
 		AppName:      cfg.App.Name,
@@ -102,7 +101,7 @@ func main() {
 
 	v := validator.New()
 	userHandler := handler.NewUserHandler(userRepo, authSvc, v)
-	reservationHandler := handler.NewReservationHandler(roomRepo, cfg)
+	reservationHandler := handler.NewReservationHandler(roomRepo, cfg, emailSvc, smsSvc)
 	handler.Register(app, handler.Handlers{
 		Health:    handler.NewHealthHandler(db, c),
 		Auth:      handler.NewAuthHandler(authSvc, v),
@@ -115,6 +114,16 @@ func main() {
 		Compat: handler.NewCompatHandler(db.Pool, cfg),
 		Users:        userHandler,
 		Reservations: reservationHandler,
+		Billing:      handler.NewBillingHandler(db.Pool, emailSvc, cfg.Auth.AccessTokenSecret),
+		Housekeeping: handler.NewHousekeepingHandler(db.Pool),
+		Revenue:      handler.NewRevenueHandler(db.Pool),
+		Procurement:  handler.NewProcurementHandler(db.Pool),
+		CRM:          handler.NewCRMHandler(db.Pool, cfg.Auth.AccessTokenSecret),
+		Channel:      handler.NewChannelHandler(db.Pool),
+		NightAudit:   handler.NewNightAuditHandler(db.Pool, cfg.Auth.AccessTokenSecret),
+		Booking:      handler.NewBookingHandler(db.Pool),
+		Asset:        handler.NewAssetHandler(db.Pool),
+		Communications: handler.NewCommunicationsHandler(emailSvc, smsSvc, cfg),
 	})
 
 	errCh := make(chan error, 1)
